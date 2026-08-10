@@ -112,16 +112,21 @@ public sealed class LibraryService
         {
             if (Directory.Exists(path))
             {
-                IEnumerable<string> files;
-                try { files = Directory.EnumerateFiles(path, "*", options).Order(StringComparer.OrdinalIgnoreCase); }
+                // Materialize inside the try — the enumeration is lazy, so exceptions
+                // surface at iteration time, not at EnumerateFiles().
+                List<string> files;
+                try
+                {
+                    files = Directory.EnumerateFiles(path, "*", options)
+                        .Where(FilenameParser.IsVideoFile)
+                        .Order(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
                 catch (IOException) { continue; }
                 catch (UnauthorizedAccessException) { continue; }
 
                 foreach (var file in files)
-                {
-                    if (FilenameParser.IsVideoFile(file))
-                        yield return file;
-                }
+                    yield return file;
             }
             else if (File.Exists(path) && FilenameParser.IsVideoFile(path))
             {

@@ -80,8 +80,13 @@ public sealed class BatchSearchService(
                     else if (outcome.Skipped) skipped++;
                     else failed++;
 
-                    item.Subtitles[language] = outcome.Downloaded ||
-                        (outcome.Skipped && SubtitleNaming.HasSubtitle(item.Path, language));
+                    // Replace the dictionary instead of mutating it — /api/library may be
+                    // serializing the old instance on another thread at this moment.
+                    item.Subtitles = new Dictionary<string, bool>(item.Subtitles)
+                    {
+                        [language] = outcome.Downloaded ||
+                            (outcome.Skipped && SubtitleNaming.HasSubtitle(item.Path, language)),
+                    };
                     events.Publish("item-result", new
                     {
                         itemId = item.Id,

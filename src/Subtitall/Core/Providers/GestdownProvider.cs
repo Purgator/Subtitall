@@ -16,7 +16,10 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
 
     // Sustained limit is ~50 req/min per IP.
     private readonly RateGate _gate = new(TimeSpan.FromMilliseconds(1300));
-    private readonly ConcurrentDictionary<string, string?> _showIdCache = new(StringComparer.OrdinalIgnoreCase);
+
+    // Misses expire quickly: a 404/423 can mean "still being indexed", and the app runs for days.
+    private static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromMinutes(5);
+    private readonly ConcurrentDictionary<string, (string? Id, DateTime AtUtc)> _showIdCache = new(StringComparer.OrdinalIgnoreCase);
 
     public string Name => ProviderName;
 
@@ -72,8 +75,9 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
 
     private async Task<string?> GetShowIdAsync(string title, CancellationToken ct)
     {
-        if (_showIdCache.TryGetValue(title, out var cached))
-            return cached;
+        if (_showIdCache.TryGetValue(title, out var cached) &&
+            (cached.Id is not null || DateTime.UtcNow - cached.AtUtc < NegativeCacheTtl))
+            return cached.Id;
 
         var response = await GetAsync($"{BaseUrl}/shows/search/{Uri.EscapeDataString(title)}", ct, retryOn423: false);
         string? id = null;
@@ -85,7 +89,7 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
                        ?? shows.FirstOrDefault();
             id = show?.Id;
         }
-        _showIdCache[title] = id;
+        _showIdCache[title] = (id, DateTime.UtcNow);
         return id;
     }
 
