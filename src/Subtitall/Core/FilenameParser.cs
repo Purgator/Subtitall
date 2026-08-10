@@ -9,7 +9,9 @@ namespace Subtitall.Core;
 /// </summary>
 public static partial class FilenameParser
 {
-    [GeneratedRegex(@"(?<![A-Za-z])S(?<s>\d{1,2})[ ._\-]?E(?<e>\d{1,3})(?:[ ._\-]*E(?<e2>\d{1,3}))*", RegexOptions.IgnoreCase)]
+    // e2 alternation covers "S01E01E02", "S01E01-E02" and "S01E01-02"; the trailing
+    // lookahead keeps "-1080p"-style tokens from reading as a second episode.
+    [GeneratedRegex(@"(?<![A-Za-z])S(?<s>\d{1,2})[ ._\-]?E(?<e>\d{1,3})(?:(?:[ ._\-]*E|-)(?<e2>\d{1,3})(?![0-9pP]))*", RegexOptions.IgnoreCase)]
     private static partial Regex SeasonEpisodeRegex();
 
     [GeneratedRegex(@"(?<![A-Za-z0-9])(?<s>\d{1,2})x(?<e>\d{1,3})\b", RegexOptions.IgnoreCase)]
@@ -39,6 +41,8 @@ public static partial class FilenameParser
         "webdl", "web-dl", "webrip", "web", "hdtv", "dvdrip", "dvd", "hdrip", "cam", "ts",
         "x264", "x265", "h264", "h265", "h.264", "h.265", "hevc", "avc", "xvid", "divx", "av1",
         "aac", "ac3", "eac3", "dts", "ddp", "dd5", "dd+", "truehd", "atmos", "flac", "opus", "mp3",
+        // separator-split halves of "Blu-Ray", "WEB-DL", "H.264" (separators become spaces before matching)
+        "blu", "dl", "264", "265",
         "10bit", "8bit", "hdr", "hdr10", "dv", "dovi", "sdr",
         "proper", "repack", "extended", "unrated", "remastered", "internal", "limited", "complete",
         "multi", "vostfr", "vf", "vo", "subbed", "dubbed", "dual",
@@ -117,8 +121,10 @@ public static partial class FilenameParser
         // If nothing matched, the "title" may still carry noise tokens — cut at the first one.
         title = CutAtNoise(title);
 
-        // Trailing "-GROUP" on scene releases (look after the episode marker, at end of name).
-        if (releaseGroup is null)
+        // Trailing "-GROUP" on scene releases. Only trust it when the name carries scene
+        // markers — otherwise hyphenated titles lose their tail ("Spider-Man" → group "Man").
+        var looksLikeSceneRelease = season.HasValue || absoluteEpisode.HasValue || year.HasValue || ContainsNoise(name);
+        if (releaseGroup is null && looksLikeSceneRelease)
         {
             var trailing = TrailingGroupRegex().Match(name.Trim());
             if (trailing.Success && !IsNoise(trailing.Groups["g"].Value) && !IsYearLike(trailing.Groups["g"].Value))
@@ -139,6 +145,9 @@ public static partial class FilenameParser
 
     private static bool IsYearLike(string value) =>
         value.Length == 4 && (value.StartsWith("19") || value.StartsWith("20"));
+
+    private static bool ContainsNoise(string name) =>
+        Regex.Split(name.ToLowerInvariant(), @"[ ._\-\[\]\(\)]+").Any(IsNoise);
 
     private static bool IsNoise(string token)
     {

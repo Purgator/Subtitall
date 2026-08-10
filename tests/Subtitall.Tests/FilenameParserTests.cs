@@ -32,6 +32,30 @@ public class FilenameParserTests
         parsed = FilenameParser.Parse("Show.Name.S01E05-E06.mkv");
         Assert.Equal(5, parsed.Episode);
         Assert.Equal(6, parsed.EndEpisode);
+
+        parsed = FilenameParser.Parse("Show.Name.S01E01-02.mkv");
+        Assert.Equal(1, parsed.Episode);
+        Assert.Equal(2, parsed.EndEpisode);
+
+        // A resolution after a dash is not a second episode.
+        parsed = FilenameParser.Parse("Show.Name.S01E01-720p.mkv");
+        Assert.Equal(1, parsed.Episode);
+        Assert.Null(parsed.EndEpisode);
+    }
+
+    [Fact]
+    public void Hyphenated_titles_keep_their_tail()
+    {
+        var parsed = FilenameParser.Parse("Spider-Man.mkv");
+        Assert.Equal("Spider Man", parsed.Title);
+        Assert.Null(parsed.ReleaseGroup);
+    }
+
+    [Fact]
+    public void Split_noise_tokens_are_cut_from_titles()
+    {
+        Assert.Equal("Movie", FilenameParser.Parse("Movie.Blu-Ray.1080p.mkv").Title);
+        Assert.Null(FilenameParser.Parse("1917.2019.2160p.WEB-DL.mkv").ReleaseGroup);
     }
 
     [Theory]
