@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "subtitall-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/Subtitall", "--no-launch-profile", "--urls", "http://localhost:5123"],
+      "port": 5123
+    }
+  ]
+}
