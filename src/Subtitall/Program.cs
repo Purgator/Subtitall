@@ -37,7 +37,7 @@ static async Task OnElectronAppReady(IServiceProvider services)
         MinWidth = 960,
         MinHeight = 600,
         Show = false,
-        BackgroundColor = "#1e1e1e",
+        BackgroundColor = "#14161a",
         Title = "Subtitall",
     };
     if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
