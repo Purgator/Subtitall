@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Subtitall.Core.Providers;
 
 namespace Subtitall.Core;
@@ -104,7 +103,7 @@ public sealed class SubtitleSearchService(
         if (candidate.HashMatch)
             score += 100;
 
-        score += 40 * TokenSimilarity(candidate.ReleaseName, Path.GetFileNameWithoutExtension(item.FileName));
+        score += 40 * TextMatch.Jaccard(candidate.ReleaseName, Path.GetFileNameWithoutExtension(item.FileName));
 
         if (item.Parsed.ReleaseGroup is { } group &&
             candidate.ReleaseName.Contains(group, StringComparison.OrdinalIgnoreCase))
@@ -114,19 +113,4 @@ public sealed class SubtitleSearchService(
         return Math.Round(score, 1);
     }
 
-    private static double TokenSimilarity(string a, string b)
-    {
-        var setA = Tokenize(a);
-        var setB = Tokenize(b);
-        if (setA.Count == 0 || setB.Count == 0)
-            return 0;
-        var intersection = setA.Intersect(setB).Count();
-        var union = setA.Union(setB).Count();
-        return (double)intersection / union;
-    }
-
-    private static HashSet<string> Tokenize(string s) =>
-        Regex.Split(s.ToLowerInvariant(), @"[^a-z0-9]+")
-            .Where(t => t.Length > 1)
-            .ToHashSet();
 }

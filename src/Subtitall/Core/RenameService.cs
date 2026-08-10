@@ -32,6 +32,16 @@ public sealed class RenameService(LibraryService library)
         foreach (var item in items)
         {
             var parsed = item.Parsed;
+
+            // Guard against renaming files that belong to a different show
+            // (e.g. an anime with absolute numbering sitting in the same list).
+            if (TextMatch.Containment(parsed.Title, showName) < 0.6)
+            {
+                proposals.Add(new RenameProposal(item.Id, item.FileName, item.FileName,
+                    $"Doesn't look like an episode of “{showName}”"));
+                continue;
+            }
+
             TvEpisode? episode = null;
             int? season = parsed.Season, number = parsed.Episode;
 

@@ -209,6 +209,38 @@ public class RenameServiceTests
     }
 
     [Fact]
+    public void Rejects_files_from_a_different_show()
+    {
+        using var dir = new TempDir();
+        var stranger = dir.CreateFile("[SubsPlease] Frieren - 02 (1080p).mkv");
+        var match = dir.CreateFile("My Show - 02.mkv");
+
+        var library = new LibraryService();
+        var items = library.AddPaths([stranger, match]);
+        var service = new RenameService(library);
+
+        var proposals = service.BuildProposals(items, "My Show", Episodes,
+            "{Show} - S{Season}E{Episode} - {Title}");
+
+        var strangerProposal = proposals.Single(p => p.OldName.Contains("Frieren"));
+        Assert.False(strangerProposal.CanApply);
+        Assert.Contains("Doesn't look like", strangerProposal.Problem);
+
+        var matchProposal = proposals.Single(p => p.OldName.Contains("My Show"));
+        Assert.True(matchProposal.CanApply);
+    }
+
+    [Fact]
+    public void Show_matching_tolerates_long_official_names()
+    {
+        // "Frieren" must match "Frieren: Beyond Journey's End" (containment, not Jaccard).
+        Assert.True(TextMatch.Containment("Frieren", "Frieren: Beyond Journey's End") >= 0.6);
+        Assert.True(TextMatch.Containment("The Office US", "The Office") >= 0.6);
+        Assert.True(TextMatch.Containment("Breaking Bad", "Breaking Bad") >= 0.6);
+        Assert.False(TextMatch.Containment("Frieren", "Breaking Bad") >= 0.6);
+    }
+
+    [Fact]
     public void Missing_episode_title_leaves_clean_name()
     {
         using var dir = new TempDir();
