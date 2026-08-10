@@ -104,6 +104,10 @@ public static class Endpoints
             return Results.NoContent();
         });
 
+        // Lets the UI resync after an SSE reconnect (e.g. missed batch-finished event).
+        api.MapGet("/subtitles/status", (BatchSearchService batch) =>
+            Results.Ok(new { running = batch.IsRunning }));
+
         api.MapGet("/subtitles/candidates", async (
             string itemId, string language, LibraryService library, SubtitleSearchService search, CancellationToken ct) =>
         {
@@ -176,17 +180,19 @@ public static class Endpoints
                 await context.Response.WriteAsync("retry: 2000\n\n", context.RequestAborted);
                 await context.Response.Body.FlushAsync(context.RequestAborted);
 
+                // Keep a single WaitToReadAsync alive across heartbeats — spawning a new
+                // one per iteration would pile up abandoned waiters on the channel.
+                var readTask = reader.WaitToReadAsync(context.RequestAborted).AsTask();
                 while (!context.RequestAborted.IsCancellationRequested)
                 {
-                    var readTask = reader.WaitToReadAsync(context.RequestAborted).AsTask();
                     var completed = await Task.WhenAny(readTask, Task.Delay(15000, context.RequestAborted));
-                    if (completed == readTask && !await readTask)
-                        break;
-
                     if (completed == readTask)
                     {
+                        if (!await readTask)
+                            break;
                         while (reader.TryRead(out var message))
                             await context.Response.WriteAsync($"data: {message}\n\n", context.RequestAborted);
+                        readTask = reader.WaitToReadAsync(context.RequestAborted).AsTask();
                     }
                     else
                     {
