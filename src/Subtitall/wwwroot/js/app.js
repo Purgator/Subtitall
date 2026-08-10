@@ -78,7 +78,10 @@ function debounce(fn, ms) {
 
 async function loadLibrary() {
   state.items = await get("/api/library");
-  render();
+  // Don't nuke the Settings form (and any unsaved input) over a library change —
+  // that view doesn't display library data anyway.
+  if (state.view === "settings") renderStatusBar();
+  else render();
 }
 
 const loadLibraryDebounced = debounce(() => loadLibrary().catch(console.error), 250);
@@ -96,6 +99,17 @@ async function loadAll() {
 
 function connectEvents() {
   const source = new EventSource("/api/events");
+  // On (re)connect, resync batch state — a batch-finished event may have been
+  // missed while disconnected, which would leave the UI stuck in "searching".
+  source.onopen = async () => {
+    try {
+      const status = await get("/api/subtitles/status");
+      if (!status.running && state.searching) {
+        state.searching = false;
+        loadLibraryDebounced();
+      }
+    } catch { /* backend not ready yet */ }
+  };
   source.onmessage = (event) => {
     const { type, data } = JSON.parse(event.data);
     switch (type) {
@@ -425,9 +439,13 @@ async function startSearch() {
 
 // ---------- Candidates modal ----------------------------------------------------------------
 
+// Guards against a stale fetch writing into a newer modal (close + reopen races).
+let modalToken = 0;
+
 async function openCandidatesModal(itemId, language) {
   const item = state.items.find((i) => i.id === itemId);
   if (!item) return;
+  const token = ++modalToken;
   const root = document.getElementById("modal-root");
   root.innerHTML = `
     <div class="modal-backdrop">
@@ -439,7 +457,7 @@ async function openCandidatesModal(itemId, language) {
         <div class="modal-body"><div class="modal-empty"><span class="spin"></span> Searching providers…</div></div>
       </div>
     </div>`;
-  const close = () => { root.innerHTML = ""; };
+  const close = () => { modalToken++; root.innerHTML = ""; };
   root.querySelector("#modal-close").onclick = close;
   root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
 
@@ -447,13 +465,15 @@ async function openCandidatesModal(itemId, language) {
   try {
     candidates = await get(`/api/subtitles/candidates?itemId=${encodeURIComponent(itemId)}&language=${encodeURIComponent(language)}`);
   } catch (err) {
+    if (token !== modalToken) return; // modal was closed/replaced meanwhile
     const body = root.querySelector(".modal-body");
     if (body) body.innerHTML = `<div class="modal-empty">Search failed: ${esc(err.message)}</div>`;
     return;
   }
 
+  if (token !== modalToken) return; // modal was closed/replaced meanwhile
   const body = root.querySelector(".modal-body");
-  if (!body) return; // modal was closed meanwhile
+  if (!body) return;
   if (!candidates.length) {
     body.innerHTML = `<div class="modal-empty">No subtitles found for this file in “${esc(language)}”.</div>`;
     return;
@@ -481,6 +501,8 @@ async function openCandidatesModal(itemId, language) {
       try {
         const outcome = await post("/api/subtitles/download", { itemId, candidate: candidates[+btn.dataset.download] });
         if (outcome.downloaded) {
+          // Clear any stale "failed" marker from a previous batch for this chip.
+          if (state.langState[itemId]) delete state.langState[itemId][language];
           toast(`Subtitle saved next to the video (${esc(language)})`, "ok");
           close();
         } else {
@@ -499,18 +521,24 @@ async function openCandidatesModal(itemId, language) {
 
 // ---------- Rename view -------------------------------------------------------------------------
 
+// Guards against out-of-order proposal responses when switching shows quickly.
+let selectShowToken = 0;
+
 async function selectShow(show) {
   if (!show) return;
+  const token = ++selectShowToken;
   state.selectedShow = show;
   state.proposals = null;
   render();
   try {
     const proposals = await post("/api/rename/proposals", { showId: show.id, showName: show.name });
+    if (token !== selectShowToken) return; // a newer selection superseded this one
     state.proposals = proposals;
     state.proposalChecks = {};
     for (const proposal of proposals)
       state.proposalChecks[proposal.itemId] = proposal.canApply;
   } catch (err) {
+    if (token !== selectShowToken) return;
     state.proposals = [];
     toast(`Could not load episodes: ${err.message}`, "err");
   }
