@@ -45,7 +45,9 @@ this project uses the maintained `ElectronNET.Core` packages).
     `OpenSubtitlesProvider` (Api-Key + optional user JWT), `SubDlProvider` (key, zip payloads).
 - `src/Subtitall/Api/` — minimal-API endpoints (`Endpoints.cs`), `EventBus` (SSE broadcast),
   `BatchSearchService` (one batch search at a time, progress events).
-- `src/Subtitall/wwwroot/` — the VS Code-style UI (`index.html`, `css/app.css`, `js/app.js`).
+- `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
+  layout (Files / Rename / Settings). Keep it simple and intuitive; do NOT style it after an IDE
+  and do not describe the app as "VS Code-like" anywhere (user's explicit request).
 - `Program.cs` — DI wiring, Electron window, auto-update check.
 
 ## Provider facts (verified 2026-08; do not "fix" these)

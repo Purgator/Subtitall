@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/Purgator/Subtitall)](https://github.com/Purgator/Subtitall/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
-Find and download subtitles for your movies, TV shows and anime — a lightweight, VS Code-style desktop app with smart episode renaming.
+Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming.
 
 Inspired by [Subber](https://github.com/noembryo/Subber).
 
@@ -73,7 +73,7 @@ build; the installer is already produced at that point.
 |---|---|---|
 | Core | `src/Subtitall/Core` | Filename parser, media library, subtitle providers, ranking, TVMaze client, rename engine, settings |
 | API | `src/Subtitall/Api` | Minimal-API REST endpoints + Server-Sent Events for live progress |
-| UI | `src/Subtitall/wwwroot` | VS Code-style interface — vanilla HTML/CSS/JS, zero frontend dependencies |
+| UI | `src/Subtitall/wwwroot` | Simple tabbed interface — vanilla HTML/CSS/JS, zero frontend dependencies |
 | Shell | `Program.cs` + ElectronNET.Core | Electron window, native dialogs, auto-update |
 | Tests | `tests/Subtitall.Tests` | xUnit suite for the core logic |
 
