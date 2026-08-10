@@ -9,6 +9,7 @@ node_modules/
 
 # Electron.NET
 /desktop-build/
+publish/
 
 # Logs & temp
 *.log

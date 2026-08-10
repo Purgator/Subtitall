@@ -131,6 +131,9 @@ function connectEvents() {
         renderFilesRow(data.itemId);
         break;
       }
+      case "update-downloaded":
+        toast(`Update v${data.version} downloaded — it will install when you close the app`, "ok", 10000);
+        break;
       case "batch-finished": {
         state.searching = false;
         const parts = [`${data.downloaded} downloaded`];
