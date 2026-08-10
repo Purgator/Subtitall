@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test
+        run: dotnet test
+
+      # electron-builder builds the NSIS installer and uploads it (with latest.yml
+      # and the blockmap) to a draft GitHub release for this tag — publish it manually.
+      - name: Package and upload draft release
+        run: dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
