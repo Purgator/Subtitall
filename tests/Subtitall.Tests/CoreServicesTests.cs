@@ -108,6 +108,31 @@ public class SubtitleNamingTests
         var companions = SubtitleNaming.FindCompanionFiles(video).ToList();
         Assert.Equal([srt], companions);
     }
+
+    [Fact]
+    public void Companions_of_longer_named_siblings_are_not_hijacked()
+    {
+        using var dir = new TempDir();
+        var video = dir.CreateFile("My Show - 03.mkv");
+        var own = dir.CreateFile("My Show - 03.en.srt");
+        dir.CreateFile("My Show - 03.5.mkv");
+        dir.CreateFile("My Show - 03.5.en.srt");   // the OVA's subtitle — not ours
+        dir.CreateFile("My Show - 03.PROPER.en.srt"); // another release's subtitle
+
+        var companions = SubtitleNaming.FindCompanionFiles(video).ToList();
+        Assert.Equal([own], companions);
+    }
+
+    [Fact]
+    public void Bare_subtitle_counts_for_any_language()
+    {
+        using var dir = new TempDir();
+        var video = dir.CreateFile("Show.S01E01.mkv");
+        dir.CreateFile("Show.S01E01.srt");
+
+        Assert.True(SubtitleNaming.HasSubtitle(video, "en"));
+        Assert.True(SubtitleNaming.HasSubtitle(video, "fr"));
+    }
 }
 
 public class SettingsServiceTests
@@ -206,6 +231,58 @@ public class RenameServiceTests
             "{Show} - S{Season}E{Episode} - {Title}");
         Assert.False(proposals2[0].CanApply);
         Assert.Contains("already exists", proposals2[0].Problem);
+    }
+
+    [Fact]
+    public void Multi_episode_files_keep_both_markers()
+    {
+        using var dir = new TempDir();
+        var video = dir.CreateFile("show.s01e01e02.mkv");
+        var library = new LibraryService();
+        var item = library.AddPaths([video])[0];
+        var service = new RenameService(library);
+
+        var proposals = service.BuildProposals([item], "My Show", Episodes,
+            "{Show} - S{Season}E{Episode} - {Title}");
+        Assert.Equal("My Show - S01E01-E02 - Pilot & Second One.mkv", proposals[0].NewName);
+    }
+
+    [Fact]
+    public void Duplicate_targets_in_one_batch_are_flagged()
+    {
+        using var dir = new TempDir();
+        var a = dir.CreateFile("show.s01e01.mkv");
+        var b = dir.CreateFile("show.1x01.720p.mkv");
+        var library = new LibraryService();
+        var items = library.AddPaths([a, b]);
+        var service = new RenameService(library);
+
+        var proposals = service.BuildProposals(items, "My Show", Episodes,
+            "{Show} - S{Season}E{Episode} - {Title}");
+        Assert.All(proposals, p => Assert.False(p.CanApply));
+        Assert.All(proposals, p => Assert.Contains("exact name", p.Problem));
+    }
+
+    [Fact]
+    public void Companion_conflict_still_renames_video_with_warning()
+    {
+        using var dir = new TempDir();
+        var video = dir.CreateFile("show.s01e01.mkv");
+        dir.CreateFile("show.s01e01.en.srt");
+        dir.CreateFile("My Show - S01E01 - Pilot.en.srt"); // target subtitle name taken
+
+        var library = new LibraryService();
+        var item = library.AddPaths([video])[0];
+        var service = new RenameService(library);
+
+        var proposals = service.BuildProposals([item], "My Show", Episodes,
+            "{Show} - S{Season}E{Episode} - {Title}");
+        var outcomes = service.Apply(proposals);
+
+        Assert.True(outcomes[0].Renamed);
+        Assert.Contains("kept its name", outcomes[0].Error);
+        Assert.True(File.Exists(Path.Combine(dir.Path, "My Show - S01E01 - Pilot.mkv")));
+        Assert.True(File.Exists(Path.Combine(dir.Path, "show.s01e01.en.srt"))); // untouched
     }
 
     [Fact]
