@@ -63,8 +63,19 @@ public sealed class RenameService(LibraryService library)
                 continue;
             }
 
+            // Multi-episode files ("S01E01E02") keep both markers and join the titles.
+            var episodeText = number.Value.ToString("00");
+            var title = episode?.Name ?? "";
+            if (parsed.EndEpisode is int endNumber && endNumber > number)
+            {
+                episodeText = $"{number:00}-E{endNumber:00}";
+                if (bySeasonEpisode.TryGetValue((season.Value, endNumber), out var lastEpisode) &&
+                    lastEpisode.Name.Length > 0)
+                    title = title.Length > 0 ? $"{title} & {lastEpisode.Name}" : lastEpisode.Name;
+            }
+
             var extension = Path.GetExtension(item.Path);
-            var newName = ApplyTemplate(template, showName, season.Value, number.Value, episode?.Name ?? "") + extension;
+            var newName = ApplyTemplate(template, showName, season.Value, episodeText, title) + extension;
             newName = SanitizeFileName(newName);
 
             string? problem = null;
@@ -79,7 +90,31 @@ public sealed class RenameService(LibraryService library)
 
             proposals.Add(new RenameProposal(item.Id, item.FileName, newName, problem));
         }
-        return proposals;
+        return FlagDuplicateTargets(proposals);
+    }
+
+    /// <summary>Two proposals resolving to the same path would collide at apply time — flag them.</summary>
+    private IReadOnlyList<RenameProposal> FlagDuplicateTargets(List<RenameProposal> proposals)
+    {
+        string TargetKey(RenameProposal p)
+        {
+            var directory = Path.GetDirectoryName(library.Get(p.ItemId)?.Path ?? "") ?? "";
+            return $"{directory}|{p.NewName}".ToLowerInvariant();
+        }
+
+        var duplicates = proposals
+            .Where(p => p.CanApply)
+            .GroupBy(TargetKey)
+            .Where(g => g.Count() > 1)
+            .SelectMany(g => g)
+            .Select(p => p.ItemId)
+            .ToHashSet();
+
+        return proposals
+            .Select(p => duplicates.Contains(p.ItemId)
+                ? p with { Problem = "Several files would get this exact name" }
+                : p)
+            .ToList();
     }
 
     /// <summary>Applies confirmed proposals: renames the video and its companion subtitle files.</summary>
@@ -112,15 +147,28 @@ public sealed class RenameService(LibraryService library)
                 library.UpdatePath(item, newPath);
 
                 // "old.en.srt" → "new.en.srt": swap the base name, keep the language/ext suffix.
+                // The video is already renamed at this point, so companion trouble is reported
+                // as a warning on a successful outcome instead of a bogus failure.
+                var warnings = new List<string>();
                 foreach (var companion in companions)
                 {
-                    var suffix = Path.GetFileName(companion)[oldBase.Length..];
-                    var target = Path.Combine(directory, newBase + suffix);
-                    if (!File.Exists(target))
-                        File.Move(companion, target);
+                    var companionName = Path.GetFileName(companion);
+                    var target = Path.Combine(directory, newBase + companionName[oldBase.Length..]);
+                    try
+                    {
+                        if (File.Exists(target))
+                            warnings.Add($"subtitle \"{companionName}\" kept its name (a file with the new name already exists)");
+                        else
+                            File.Move(companion, target);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        warnings.Add($"subtitle \"{companionName}\" could not be renamed: {ex.Message}");
+                    }
                 }
 
-                outcomes.Add(new RenameOutcome(proposal.ItemId, true, null));
+                outcomes.Add(new RenameOutcome(proposal.ItemId, true,
+                    warnings.Count > 0 ? "Video renamed, but " + string.Join("; ", warnings) : null));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -130,12 +178,12 @@ public sealed class RenameService(LibraryService library)
         return outcomes;
     }
 
-    private static string ApplyTemplate(string template, string show, int season, int episode, string title)
+    private static string ApplyTemplate(string template, string show, int season, string episodeText, string title)
     {
         var result = template
             .Replace("{Show}", show, StringComparison.OrdinalIgnoreCase)
             .Replace("{Season}", season.ToString("00"), StringComparison.OrdinalIgnoreCase)
-            .Replace("{Episode}", episode.ToString("00"), StringComparison.OrdinalIgnoreCase)
+            .Replace("{Episode}", episodeText, StringComparison.OrdinalIgnoreCase)
             .Replace("{Title}", title, StringComparison.OrdinalIgnoreCase);
         // Tidy leftovers when the episode has no title: "… - " at the end.
         result = Regex.Replace(result, @"[ \-]+$", "");
