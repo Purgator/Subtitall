@@ -10,7 +10,8 @@ public sealed class AppSettings
 
     public ProviderSettings SubDl { get; set; } = new();
 
-    public ProviderSettings Podnapisi { get; set; } = new() { Enabled = true };
+    /// <summary>Gestdown (Addic7ed proxy) — keyless, TV shows only.</summary>
+    public ProviderSettings Gestdown { get; set; } = new() { Enabled = true };
 
     /// <summary>Template used by the rename feature.</summary>
     public string RenameTemplate { get; set; } = "{Show} - S{Season}E{Episode} - {Title}";
@@ -24,4 +25,9 @@ public sealed class ProviderSettings
     public bool Enabled { get; set; }
 
     public string ApiKey { get; set; } = "";
+
+    /// <summary>Optional account login — OpenSubtitles uses it for the per-user download quota.</summary>
+    public string Username { get; set; } = "";
+
+    public string Password { get; set; } = "";
 }
