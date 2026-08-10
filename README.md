@@ -63,7 +63,9 @@ dotnet test
 dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
 ```
 
-The NSIS installer (plus `latest.yml` and the `.blockmap` used by auto-update) lands under `src/Subtitall/publish/`.
+The NSIS installer and its `.blockmap` land in `src/Subtitall/bin/Release/net10.0/win-x64/publish/`.
+Without a `GH_TOKEN` environment variable the final upload step fails — that's fine for a local
+build; the installer is already produced at that point.
 
 ### Architecture
 
@@ -79,10 +81,16 @@ Settings are stored in `%APPDATA%/Subtitall/settings.json`.
 
 ### Releasing
 
-1. Bump `<Version>` in `src/Subtitall/Subtitall.csproj` (semver).
-2. Commit (`🔖 Release vX.Y.Z`), tag `vX.Y.Z`, push both.
-3. Build the installer (see above) and create a GitHub release for the tag with `Subtitall-Setup-X.Y.Z.exe`, `Subtitall-Setup-X.Y.Z.exe.blockmap` and `latest.yml` attached.
-4. Publish the release (auto-update ignores drafts).
+1. Bump `<Version>` in `src/Subtitall/Subtitall.csproj` (semver), commit (`🔖 Release vX.Y.Z`) and push.
+2. Package with your GitHub token set — electron-builder builds the installer and uploads it
+   (with `latest.yml` and the `.blockmap`) to a **draft** GitHub release tagged `vX.Y.Z`:
+
+   ```bash
+   GH_TOKEN=$(gh auth token) dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
+   ```
+
+3. Review the draft on GitHub, add release notes, and **publish** it — auto-update ignores drafts,
+   and publishing creates the `vX.Y.Z` tag.
 
 ## License
 

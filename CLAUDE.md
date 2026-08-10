@@ -14,6 +14,8 @@ Rules for AI agents (and humans) working on this repository.
 4. **Semver releases.** Publish a GitHub release when a meaningful set of features/fixes has
    accumulated — follow the "Releasing" section of the README exactly. `<Version>` in
    `Subtitall.csproj` must always equal the latest tag (electron-updater compares them).
+   With `GH_TOKEN` set, `dotnet publish` uploads the installer + `latest.yml` + blockmap to a
+   draft release itself; publishing the draft creates the tag and activates auto-update.
 5. **English only** in the UI, code, comments and docs.
 6. **Keep it lightweight.** The frontend is vanilla HTML/CSS/JS on purpose — no frameworks,
    no build step, no npm dependencies for the UI.
