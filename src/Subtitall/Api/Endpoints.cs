@@ -17,6 +17,12 @@ public static class Endpoints
             version = UserAgent.Version,
             isElectron = ElectronBridge.IsActive,
             languages = Languages.All.Select(l => new { code = l.Code, name = l.Name }),
+            // Which providers this build ships a key for (never the keys themselves).
+            builtInKeys = new
+            {
+                openSubtitles = BuiltInKeys.OpenSubtitles.Length > 0,
+                tmdb = BuiltInKeys.Tmdb.Length > 0,
+            },
         }));
 
         // ---- Library -------------------------------------------------------

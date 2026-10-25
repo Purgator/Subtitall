@@ -30,7 +30,10 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
     public string Name => ProviderName;
 
     public bool IsConfigured(AppSettings settings) =>
-        settings.OpenSubtitles.Enabled && settings.OpenSubtitles.ApiKey.Trim().Length > 0;
+        settings.OpenSubtitles.Enabled && ResolvedKey(settings).Length > 0;
+
+    private static string ResolvedKey(AppSettings settings) =>
+        settings.OpenSubtitles.ResolveApiKey(BuiltInKeys.OpenSubtitles);
 
     public async Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(
         MediaItem item, string language, AppSettings settings, CancellationToken ct)
@@ -127,7 +130,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         await _gate.WaitAsync(ct);
 
         using var request = new HttpRequestMessage(method, url);
-        request.Headers.TryAddWithoutValidation("Api-Key", settings.OpenSubtitles.ApiKey.Trim());
+        request.Headers.TryAddWithoutValidation("Api-Key", ResolvedKey(settings));
         request.Headers.TryAddWithoutValidation("User-Agent", UserAgent.Value);
         request.Headers.TryAddWithoutValidation("Accept", "*/*");
         if (withToken && await GetTokenAsync(settings, ct) is { } token)
@@ -156,7 +159,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         if (config.Username.Trim().Length == 0 || config.Password.Length == 0)
             return null; // Anonymous mode — Api-Key only, 5 downloads/day/IP.
 
-        var cacheKey = $"{config.Username}|{config.ApiKey}";
+        var cacheKey = $"{config.Username}|{ResolvedKey(settings)}";
         if (_token is not null && _tokenKey == cacheKey && DateTime.UtcNow - _tokenIssuedUtc < TimeSpan.FromHours(20))
             return _token;
 
@@ -168,7 +171,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
 
             await _gate.WaitAsync(ct);
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/login");
-            request.Headers.TryAddWithoutValidation("Api-Key", config.ApiKey.Trim());
+            request.Headers.TryAddWithoutValidation("Api-Key", ResolvedKey(settings));
             request.Headers.TryAddWithoutValidation("User-Agent", UserAgent.Value);
             request.Content = new StringContent(
                 JsonSerializer.Serialize(new { username = config.Username.Trim(), password = config.Password }),

@@ -6,7 +6,8 @@ public sealed class AppSettings
     /// <summary>Subtitle languages to fetch, as ISO 639-1 codes, in priority order.</summary>
     public List<string> Languages { get; set; } = ["en"];
 
-    public ProviderSettings OpenSubtitles { get; set; } = new();
+    /// <summary>Enabled out of the box when the build ships a built-in key.</summary>
+    public ProviderSettings OpenSubtitles { get; set; } = new() { Enabled = BuiltInKeys.OpenSubtitles.Length > 0 };
 
     public ProviderSettings SubDl { get; set; } = new();
 
@@ -14,7 +15,7 @@ public sealed class AppSettings
     public ProviderSettings SubSource { get; set; } = new();
 
     /// <summary>TMDB — optional metadata source for renaming (free API key); TVMaze stays keyless.</summary>
-    public ProviderSettings Tmdb { get; set; } = new();
+    public ProviderSettings Tmdb { get; set; } = new() { Enabled = BuiltInKeys.Tmdb.Length > 0 };
 
     /// <summary>Gestdown (Addic7ed proxy) — keyless, TV shows only.</summary>
     public ProviderSettings Gestdown { get; set; } = new() { Enabled = true };
@@ -36,4 +37,8 @@ public sealed class ProviderSettings
     public string Username { get; set; } = "";
 
     public string Password { get; set; } = "";
+
+    /// <summary>The user's own key when entered, else the key baked into the official build.</summary>
+    public string ResolveApiKey(string builtIn) =>
+        ApiKey.Trim() is { Length: > 0 } own ? own : builtIn;
 }
