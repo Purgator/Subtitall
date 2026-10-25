@@ -144,15 +144,16 @@ public static class Endpoints
         });
 
         // ---- Rename --------------------------------------------------------
-        api.MapGet("/rename/shows", async (string q, TvMazeService tvmaze, CancellationToken ct) =>
-            Results.Ok(await tvmaze.SearchShowsAsync(q, ct)));
+        api.MapGet("/rename/shows", async (string q, ShowMetadataService metadata, CancellationToken ct) =>
+            Results.Ok(await metadata.SearchShowsAsync(q, ct)));
 
         api.MapPost("/rename/proposals", async (
-            ProposalsRequest request, LibraryService library, TvMazeService tvmaze,
+            ProposalsRequest request, LibraryService library, ShowMetadataService metadata,
             RenameService rename, SettingsService settings, CancellationToken ct) =>
         {
-            var episodesTask = tvmaze.GetEpisodesAsync(request.ShowId, ct);
-            var aliasesTask = tvmaze.GetAliasesAsync(request.ShowId, ct);
+            var source = request.Source ?? TvMazeService.SourceName;
+            var episodesTask = metadata.GetEpisodesAsync(source, request.ShowId, request.ShowName, ct);
+            var aliasesTask = metadata.GetAliasesAsync(source, request.ShowId, request.ShowName, ct);
             await Task.WhenAll(episodesTask, aliasesTask);
             var items = request.ItemIds is { Count: > 0 }
                 ? request.ItemIds.Select(library.Get).OfType<MediaItem>().ToList()
@@ -240,7 +241,7 @@ public static class Endpoints
     public sealed record RevealRequest(string ItemId);
     public sealed record SearchRequest(List<string>? ItemIds);
     public sealed record DownloadRequest(string ItemId, SubtitleCandidate Candidate);
-    public sealed record ProposalsRequest(int ShowId, string ShowName, List<string>? ItemIds);
+    public sealed record ProposalsRequest(int ShowId, string ShowName, List<string>? ItemIds, string? Source);
     public sealed record ApplyRenameRequest(List<RenameProposal>? Proposals);
 }
 

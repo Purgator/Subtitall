@@ -12,12 +12,14 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 - 🎬 **Link videos your way** — drag & drop files or folders anywhere in the window, or use the Add buttons. Folders are scanned recursively.
 - 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / anime absolute numbering, year and release group are detected automatically.
 - 🌍 **Multiple languages** — pick any number of subtitle languages; each is saved as `video.<lang>.srt` next to the video so every media player picks it up.
-- 🔎 **Three subtitle sources**
+- 🔎 **Four subtitle sources**
   - **Gestdown** (Addic7ed mirror) — TV shows, works out of the box, no account needed
   - **OpenSubtitles** — movies + TV, free API key
   - **SubDL** — movies + TV, free API key
-- 🏆 **Best match wins** — results are ranked (exact file hash match, release-name similarity, popularity) and the best one downloads automatically. Prefer choosing yourself? Click a language chip to pick from the full list.
-- ✏️ **Episode renaming** — match your files against [TVMaze](https://www.tvmaze.com), preview `Show - S01E02 - Title.mkv` names, confirm, done. Subtitles sitting next to the videos are renamed too.
+  - **SubSource** (hosts the former Subscene archive) — movies + TV, free API key
+- 🏆 **Best match wins** — results are ranked (exact file hash match, release-name similarity, popularity, hearing-impaired flag, provider reliability) and the best one downloads automatically. Prefer choosing yourself? Click a language chip to pick from the full list.
+- 🛡️ **Built for reliability** — searches fan out to every enabled source in parallel; a source that keeps failing is put in a short cooldown instead of slowing everything down; every download is validated (an HTML error page never gets saved as `.srt`) and falls back to the next-best candidate across sources, never retrying the same source more than twice.
+- ✏️ **Episode renaming** — match your files against [TVMaze](https://www.tvmaze.com) (always on, keyless) and optionally [TMDB](https://www.themoviedb.org) (free API key), preview `Show - S01E02 - Title.mkv` names, confirm, done. Results from both sources are merged; if the one you picked has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
 - 🔄 **Auto-update** — the app updates itself from GitHub Releases.
 
@@ -33,7 +35,9 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 2. *(Optional)* Open **Settings** (gear icon) to pick your languages and add provider API keys:
    - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota.
    - SubDL: grab a free key from your [SubDL panel](https://subdl.com/panel/api).
-   - Gestdown needs nothing and is enabled by default (TV shows only).
+   - SubSource: create a free key from your [SubSource profile](https://subsource.net/profile) (API tab).
+   - TMDB (for renaming): create a free key in your [TMDB API settings](https://www.themoviedb.org/settings/api) — the v3 key and the v4 read-access token both work.
+   - Gestdown and TVMaze need nothing; Gestdown is enabled by default (TV shows only).
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video.
 4. **Rename episodes** (pencil icon): search your show, check the proposed names, click *Rename*.
 
@@ -76,7 +80,7 @@ only (see Releasing).
 
 | Layer | Where | What |
 |---|---|---|
-| Core | `src/Subtitall/Core` | Filename parser, media library, subtitle providers, ranking, TVMaze client, rename engine, settings |
+| Core | `src/Subtitall/Core` | Filename parser, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, settings |
 | API | `src/Subtitall/Api` | Minimal-API REST endpoints + Server-Sent Events for live progress |
 | UI | `src/Subtitall/wwwroot` | Simple tabbed interface — vanilla HTML/CSS/JS, zero frontend dependencies |
 | Shell | `Program.cs` + ElectronNET.Core | Electron window, native dialogs, auto-update |

@@ -3,11 +3,11 @@ using System.Collections.Concurrent;
 namespace Subtitall.Core;
 
 /// <summary>
-/// Resolves a filename title to the show's other known names via TVMaze
-/// ("Shingeki no Kyojin" → ["Attack on Titan", "L'attaque des Titans", …]) so subtitle
-/// providers that only know one of them still find the show. Results are cached per title.
+/// Resolves a filename title to the show's other known names via the configured metadata
+/// sources ("Shingeki no Kyojin" → ["Attack on Titan", "L'attaque des Titans", …]) so
+/// subtitle providers that only know one of them still find the show. Cached per title.
 /// </summary>
-public sealed class ShowAliasResolver(TvMazeService tvmaze, ILogger<ShowAliasResolver> logger)
+public sealed class ShowAliasResolver(ShowMetadataService metadata, ILogger<ShowAliasResolver> logger)
 {
     private readonly ConcurrentDictionary<string, IReadOnlyList<string>> _cache =
         new(StringComparer.OrdinalIgnoreCase);
@@ -21,10 +21,10 @@ public sealed class ShowAliasResolver(TvMazeService tvmaze, ILogger<ShowAliasRes
         try
         {
             // TVMaze search matches alternate titles too, so a romaji query finds the show.
-            var show = (await tvmaze.SearchShowsAsync(title, ct)).FirstOrDefault();
+            var show = (await metadata.SearchShowsAsync(title, ct)).FirstOrDefault();
             if (show is not null)
             {
-                var aliases = await tvmaze.GetAliasesAsync(show.Id, ct);
+                var aliases = await metadata.GetAliasesAsync(show.Source, show.Id, show.Name, ct);
                 names = new[] { show.Name }.Concat(aliases)
                     .Where(n => !string.Equals(n, title, StringComparison.OrdinalIgnoreCase))
                     .Distinct(StringComparer.OrdinalIgnoreCase)

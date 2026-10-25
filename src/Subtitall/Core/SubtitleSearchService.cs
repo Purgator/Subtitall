@@ -10,6 +10,7 @@ public sealed class SubtitleSearchService(
     IEnumerable<ISubtitleProvider> providers,
     SettingsService settings,
     ShowAliasResolver aliases,
+    ProviderHealth health,
     ILogger<SubtitleSearchService> logger)
 {
     /// <summary>Searches all configured providers; returns candidates ranked best-first.</summary>
@@ -18,6 +19,10 @@ public sealed class SubtitleSearchService(
     {
         var config = settings.Current;
         var active = providers.Where(p => p.IsConfigured(config)).ToList();
+        var skipped = active.Where(p => !health.IsAvailable(p.Name)).ToList();
+        foreach (var provider in skipped)
+            logger.LogInformation("{Provider} is cooling down after repeated failures — skipped", provider.Name);
+        active = active.Except(skipped).ToList();
 
         // TV shows are often named differently across providers (romaji vs English anime
         // titles) — resolve the other known names once so providers can fall back to them.
@@ -28,7 +33,9 @@ public sealed class SubtitleSearchService(
         {
             try
             {
-                return await provider.SearchAsync(item, language, config, ct);
+                var found = await provider.SearchAsync(item, language, config, ct);
+                health.ReportSuccess(provider.Name);
+                return found;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -36,6 +43,7 @@ public sealed class SubtitleSearchService(
             }
             catch (Exception ex)
             {
+                health.ReportFailure(provider.Name);
                 logger.LogWarning(ex, "{Provider} search failed for {File}", provider.Name, item.FileName);
                 return (IReadOnlyList<SubtitleCandidate>)[];
             }
@@ -43,7 +51,7 @@ public sealed class SubtitleSearchService(
 
         var results = (await Task.WhenAll(tasks)).SelectMany(r => r).ToList();
         foreach (var candidate in results)
-            candidate.Score = ComputeScore(candidate, item);
+            candidate.Score = ComputeScore(candidate, item, health.SuccessRate(candidate.Provider));
         return results.OrderByDescending(c => c.Score).ToList();
     }
 
@@ -63,7 +71,7 @@ public sealed class SubtitleSearchService(
             return new SearchOutcome(item.Id, language, false, false, null, null, reason);
         }
 
-        return await DownloadCandidateAsync(item, candidates.Take(4).ToList(), language, ct);
+        return await DownloadCandidateAsync(item, SelectDownloadOrder(candidates), language, ct);
     }
 
     /// <summary>Downloads one specific candidate chosen by the user.</summary>
@@ -85,8 +93,11 @@ public sealed class SubtitleSearchService(
             try
             {
                 var payload = await provider.DownloadAsync(candidate, config, ct);
+                if (!SubtitleValidator.LooksLikeSubtitle(payload.Content, payload.Extension))
+                    throw new InvalidOperationException("Downloaded file doesn't look like a subtitle");
                 var path = SubtitleNaming.GetSubtitlePath(item.Path, language, payload.Extension);
                 await File.WriteAllBytesAsync(path, payload.Content, ct);
+                health.ReportSuccess(provider.Name);
                 return new SearchOutcome(item.Id, language, true, false, provider.Name, path, null);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -95,6 +106,7 @@ public sealed class SubtitleSearchService(
             }
             catch (Exception ex)
             {
+                health.ReportFailure(provider.Name);
                 lastError = $"{candidate.Provider}: {ex.Message}";
                 logger.LogWarning(ex, "Download from {Provider} failed for {File}", candidate.Provider, item.FileName);
             }
@@ -103,7 +115,29 @@ public sealed class SubtitleSearchService(
         return new SearchOutcome(item.Id, language, false, false, null, null, lastError ?? "No subtitles found");
     }
 
-    private static double ComputeScore(SubtitleCandidate candidate, MediaItem item)
+    /// <summary>
+    /// Picks the candidates worth a download attempt: best score first, but never more
+    /// than two per provider so one bad provider can't exhaust every fallback slot.
+    /// </summary>
+    internal static List<SubtitleCandidate> SelectDownloadOrder(IReadOnlyList<SubtitleCandidate> ranked)
+    {
+        const int maxAttempts = 6, maxPerProvider = 2;
+        var perProvider = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var selected = new List<SubtitleCandidate>();
+        foreach (var candidate in ranked)
+        {
+            var used = perProvider.GetValueOrDefault(candidate.Provider);
+            if (used >= maxPerProvider)
+                continue;
+            perProvider[candidate.Provider] = used + 1;
+            selected.Add(candidate);
+            if (selected.Count >= maxAttempts)
+                break;
+        }
+        return selected;
+    }
+
+    internal static double ComputeScore(SubtitleCandidate candidate, MediaItem item, double providerSuccessRate = 1.0)
     {
         double score = 0;
         if (candidate.HashMatch)
@@ -116,6 +150,14 @@ public sealed class SubtitleSearchService(
             score += 15;
 
         score += Math.Min(10, Math.Log10(candidate.Downloads + 1) * 4);
+
+        // Prefer regular subtitles over hearing-impaired ones when both exist.
+        if (candidate.HearingImpaired)
+            score -= 8;
+
+        // Providers that have been failing recently rank a little lower.
+        score += 5 * providerSuccessRate;
+
         return Math.Round(score, 1);
     }
 

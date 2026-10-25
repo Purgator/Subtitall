@@ -81,6 +81,7 @@ function activeProviders() {
     s.gestdown?.enabled ? "Gestdown" : null,
     s.openSubtitles?.enabled && s.openSubtitles?.apiKey ? "OpenSubtitles" : null,
     s.subDl?.enabled && s.subDl?.apiKey ? "SubDL" : null,
+    s.subSource?.enabled && s.subSource?.apiKey ? "SubSource" : null,
   ].filter(Boolean);
 }
 
@@ -422,7 +423,7 @@ async function openCandidatesModal(itemId, language) {
         ${candidates.map((c, i) => `
           <tr>
             <td>${c.score}${c.hashMatch ? ' <span class="hash-badge">exact match</span>' : ""}</td>
-            <td class="release" title="${esc(c.releaseName)}">${esc(c.releaseName) || "<i>unnamed</i>"}</td>
+            <td class="release" title="${esc(c.releaseName)}">${esc(c.releaseName) || "<i>unnamed</i>"}${c.hearingImpaired ? ' <span class="hi-badge" title="Hearing impaired (sound cues)">HI</span>' : ""}</td>
             <td>${esc(c.provider)}</td>
             <td>${c.downloads || ""}</td>
             <td><button class="btn small" data-download="${i}">Download</button></td>
@@ -467,7 +468,7 @@ async function selectShow(show) {
   state.proposals = null;
   render();
   try {
-    const proposals = await post("/api/rename/proposals", { showId: show.id, showName: show.name });
+    const proposals = await post("/api/rename/proposals", { showId: show.id, showName: show.name, source: show.source });
     if (token !== selectShowToken) return; // a newer selection superseded this one
     state.proposals = proposals;
     state.proposalChecks = {};
@@ -492,7 +493,7 @@ function renderRenameView(main) {
       <div class="card">
         <div class="panel-title">1 · Find the show</div>
         <div class="panel-body">
-          <input class="input" id="show-search" placeholder="Search on TVMaze…" value="${esc(state.showQuery)}">
+          <input class="input" id="show-search" placeholder="Search on TVMaze / TMDB…" value="${esc(state.showQuery)}">
           <div id="show-results" style="margin-top:8px"></div>
         </div>
       </div>
@@ -520,16 +521,16 @@ function renderShowResults() {
     root.innerHTML = `<div class="hint-text" style="padding:6px 2px">${state.showQuery.length >= 2 ? "No results." : "Type the show's name, then pick it from the results."}</div>`;
     return;
   }
-  root.innerHTML = state.showResults.map((show) => `
-    <div class="show-result ${state.selectedShow?.id === show.id ? "selected" : ""}" data-id="${show.id}">
+  root.innerHTML = state.showResults.map((show, index) => `
+    <div class="show-result ${state.selectedShow?.id === show.id && state.selectedShow?.source === show.source ? "selected" : ""}" data-index="${index}">
       ${show.imageUrl ? `<img src="${esc(show.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
       <div class="meta">
         <div class="name">${esc(show.name)}</div>
-        <div class="sub">${esc([show.premiered?.slice(0, 4), show.network].filter(Boolean).join(" · "))}</div>
+        <div class="sub">${esc([show.premiered?.slice(0, 4), show.network, show.source].filter(Boolean).join(" · "))}</div>
       </div>
     </div>`).join("");
   root.querySelectorAll(".show-result").forEach((el) => {
-    el.onclick = () => selectShow(state.showResults.find((s) => String(s.id) === el.dataset.id));
+    el.onclick = () => selectShow(state.showResults[Number(el.dataset.index)]);
   });
 }
 
@@ -665,6 +666,33 @@ function renderSettingsView(main) {
             <div class="settings-row"><label>API key</label><input class="input" id="subdl-key" value="${esc(s.subDl.apiKey)}" placeholder="Required"></div>
           </div>
         </div>
+
+        <div class="provider-card ${s.subSource.enabled ? "enabled" : ""}" id="card-subsource">
+          <div class="head">
+            <label class="toggle"><input type="checkbox" id="subsource-enabled" ${s.subSource.enabled ? "checked" : ""}><span class="slider"></span></label>
+            <span class="name">SubSource</span>
+            <span class="note">movies + TV (Subscene archive) — <a href="https://subsource.net/profile" target="_blank">get a free API key</a></span>
+          </div>
+          <div class="fields">
+            <div class="settings-row"><label>API key</label><input class="input" id="subsource-key" value="${esc(s.subSource.apiKey)}" placeholder="Required"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>Rename sources</h3>
+        <div class="desc">TVMaze is always on (no key needed). TMDB fills the gaps when a show or episode is missing on TVMaze.</div>
+
+        <div class="provider-card ${s.tmdb.enabled ? "enabled" : ""}" id="card-tmdb">
+          <div class="head">
+            <label class="toggle"><input type="checkbox" id="tmdb-enabled" ${s.tmdb.enabled ? "checked" : ""}><span class="slider"></span></label>
+            <span class="name">TMDB</span>
+            <span class="note"><a href="https://www.themoviedb.org/settings/api" target="_blank">get a free API key</a> (v3 key or v4 token)</span>
+          </div>
+          <div class="fields">
+            <div class="settings-row"><label>API key</label><input class="input" id="tmdb-key" value="${esc(s.tmdb.apiKey)}" placeholder="Required"></div>
+          </div>
+        </div>
       </div>
 
       <div class="settings-section">
@@ -686,7 +714,7 @@ function renderSettingsView(main) {
       </div>
     </div>`;
 
-  ["gestdown", "opensubtitles", "subdl"].forEach((key) => {
+  ["gestdown", "opensubtitles", "subdl", "subsource", "tmdb"].forEach((key) => {
     const card = main.querySelector(`#card-${key}`);
     const box = card.querySelector("input[type=checkbox]");
     box.onchange = () => card.classList.toggle("enabled", box.checked);
@@ -712,6 +740,8 @@ function renderSettingsView(main) {
         password: main.querySelector("#os-pass").value,
       },
       subDl: { ...s.subDl, enabled: main.querySelector("#subdl-enabled").checked, apiKey: main.querySelector("#subdl-key").value.trim() },
+      subSource: { ...s.subSource, enabled: main.querySelector("#subsource-enabled").checked, apiKey: main.querySelector("#subsource-key").value.trim() },
+      tmdb: { ...s.tmdb, enabled: main.querySelector("#tmdb-enabled").checked, apiKey: main.querySelector("#tmdb-key").value.trim() },
       overwriteExisting: main.querySelector("#overwrite").checked,
       renameTemplate: main.querySelector("#rename-template").value.trim() || "{Show} - S{Season}E{Episode} - {Title}",
     };

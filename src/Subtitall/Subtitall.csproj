@@ -17,4 +17,8 @@
     <PackageReference Include="ElectronNET.Core.AspNet" Version="0.5.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Subtitall.Tests" />
+  </ItemGroup>
+
 </Project>

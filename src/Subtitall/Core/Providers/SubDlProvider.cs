@@ -94,7 +94,7 @@ public sealed class SubDlProvider(IHttpClientFactory httpFactory) : ISubtitlePro
                     continue;
             }
 
-            candidates.Add(Candidate(sub.Url, language, sub.ReleaseName ?? sub.Name ?? ""));
+            candidates.Add(Candidate(sub.Url, language, sub.ReleaseName ?? sub.Name ?? "", sub.Hi ?? false));
         }
         return candidates;
     }
@@ -105,12 +105,14 @@ public sealed class SubDlProvider(IHttpClientFactory httpFactory) : ISubtitlePro
     private static bool LanguageMatches(string? subdlCode, string internalCode) =>
         subdlCode is not null && Languages.FromSubDl(subdlCode) == internalCode;
 
-    private static SubtitleCandidate Candidate(string url, string language, string releaseName) => new()
+    private static SubtitleCandidate Candidate(
+        string url, string language, string releaseName, bool hearingImpaired = false) => new()
     {
         Provider = ProviderName,
         DownloadRef = url,
         Language = language,
         ReleaseName = releaseName,
+        HearingImpaired = hearingImpaired,
     };
 
     public async Task<SubtitlePayload> DownloadAsync(
@@ -175,6 +177,7 @@ public sealed class SubDlProvider(IHttpClientFactory httpFactory) : ISubtitlePro
         public int? EpisodeFrom { get; set; }
         public int? EpisodeEnd { get; set; }
         public bool? FullSeason { get; set; }
+        public bool? Hi { get; set; }
         public List<UnpackFileDto>? UnpackFiles { get; set; }
     }
 

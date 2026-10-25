@@ -10,6 +10,12 @@ public sealed class AppSettings
 
     public ProviderSettings SubDl { get; set; } = new();
 
+    /// <summary>SubSource (former Subscene archive) — free API key.</summary>
+    public ProviderSettings SubSource { get; set; } = new();
+
+    /// <summary>TMDB — optional metadata source for renaming (free API key); TVMaze stays keyless.</summary>
+    public ProviderSettings Tmdb { get; set; } = new();
+
     /// <summary>Gestdown (Addic7ed proxy) — keyless, TV shows only.</summary>
     public ProviderSettings Gestdown { get; set; } = new() { Enabled = true };
 

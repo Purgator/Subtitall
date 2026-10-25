@@ -65,6 +65,7 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
                 Language = language,
                 ReleaseName = $"{sub.Version} {string.Join(' ', sub.Qualities ?? [])}".Trim(),
                 Downloads = sub.DownloadCount ?? 0,
+                HearingImpaired = sub.HearingImpaired ?? false,
             });
         }
         return candidates;
@@ -160,6 +161,7 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
         public bool? Completed { get; set; }
         public string? DownloadUri { get; set; }
         public int? DownloadCount { get; set; }
+        public bool? HearingImpaired { get; set; }
         public List<string>? Qualities { get; set; }
     }
 }

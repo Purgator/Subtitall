@@ -347,6 +347,7 @@ body {
 .cand-table th { color: var(--dim); text-transform: uppercase; font-size: 11px; }
 .cand-table .release { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
 .hash-badge { background: var(--ok-bg); color: var(--ok); font-size: 10.5px; padding: 2px 7px; border-radius: 999px; }
+.hi-badge { background: var(--card-2); color: var(--dim); border: 1px solid var(--border); font-size: 10px; padding: 1px 6px; border-radius: 999px; }
 
 .modal-empty { padding: 28px; text-align: center; color: var(--dim); }
 
