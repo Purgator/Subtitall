@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/refs/heads/master/packages/app-builder-lib/scheme.json",
-  "appId": "com.purgator.subtitall",
+  "appId": "subtitall",
   "productName": "Subtitall",
   "compression": "maximum",
   "win": {
