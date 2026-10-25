@@ -17,8 +17,15 @@ public sealed class RenameService(LibraryService library)
         IReadOnlyList<MediaItem> items,
         string showName,
         IReadOnlyList<TvEpisode> episodes,
-        string template)
+        string template,
+        IReadOnlyList<string>? alternateNames = null)
     {
+        // Files are matched against every name the show is known under — the TVMaze
+        // title plus its akas (romaji anime names, translations) and their acronyms.
+        var knownNames = new List<string> { showName };
+        if (alternateNames is not null)
+            knownNames.AddRange(alternateNames);
+
         // Absolute (anime) numbering maps onto regular episodes ordered by season/number.
         var ordered = episodes
             .Where(e => e.Season > 0)
@@ -35,7 +42,7 @@ public sealed class RenameService(LibraryService library)
 
             // Guard against renaming files that belong to a different show
             // (e.g. an anime with absolute numbering sitting in the same list).
-            if (TextMatch.Containment(parsed.Title, showName) < 0.6)
+            if (!TextMatch.MatchesShowName(parsed.Title, knownNames))
             {
                 proposals.Add(new RenameProposal(item.Id, item.FileName, item.FileName,
                     $"Doesn't look like an episode of “{showName}”"));

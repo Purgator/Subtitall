@@ -151,11 +151,14 @@ public static class Endpoints
             ProposalsRequest request, LibraryService library, TvMazeService tvmaze,
             RenameService rename, SettingsService settings, CancellationToken ct) =>
         {
-            var episodes = await tvmaze.GetEpisodesAsync(request.ShowId, ct);
+            var episodesTask = tvmaze.GetEpisodesAsync(request.ShowId, ct);
+            var aliasesTask = tvmaze.GetAliasesAsync(request.ShowId, ct);
+            await Task.WhenAll(episodesTask, aliasesTask);
             var items = request.ItemIds is { Count: > 0 }
                 ? request.ItemIds.Select(library.Get).OfType<MediaItem>().ToList()
                 : library.GetAll();
-            var proposals = rename.BuildProposals(items, request.ShowName, episodes, settings.Current.RenameTemplate);
+            var proposals = rename.BuildProposals(
+                items, request.ShowName, episodesTask.Result, settings.Current.RenameTemplate, aliasesTask.Result);
             return Results.Ok(proposals);
         });
 

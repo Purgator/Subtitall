@@ -18,6 +18,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
   - **SubDL** — movies + TV, free API key
 - 🏆 **Best match wins** — results are ranked (exact file hash match, release-name similarity, popularity) and the best one downloads automatically. Prefer choosing yourself? Click a language chip to pick from the full list.
 - ✏️ **Episode renaming** — match your files against [TVMaze](https://www.tvmaze.com), preview `Show - S01E02 - Title.mkv` names, confirm, done. Subtitles sitting next to the videos are renamed too.
+- 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
 - 🔄 **Auto-update** — the app updates itself from GitHub Releases.
 
 ## Install (Windows)

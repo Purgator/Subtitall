@@ -7,13 +7,14 @@ public sealed record TvShow(int Id, string Name, string? Premiered, string? Netw
 
 public sealed record TvEpisode(int Season, int Number, string Name, string? Airdate);
 
-/// <summary>TVMaze API client (free, no key required) used by the rename feature.</summary>
-public sealed class TvMazeService(HttpClient http)
+/// <summary>TVMaze API client (free, no key required) used for renaming and alias resolution.</summary>
+public sealed class TvMazeService(IHttpClientFactory httpFactory)
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<IReadOnlyList<TvShow>> SearchShowsAsync(string query, CancellationToken ct = default)
     {
+        var http = httpFactory.CreateClient();
         var url = $"https://api.tvmaze.com/search/shows?q={Uri.EscapeDataString(query)}";
         using var response = await http.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
@@ -31,6 +32,7 @@ public sealed class TvMazeService(HttpClient http)
 
     public async Task<IReadOnlyList<TvEpisode>> GetEpisodesAsync(int showId, CancellationToken ct = default)
     {
+        var http = httpFactory.CreateClient();
         var url = $"https://api.tvmaze.com/shows/{showId}/episodes";
         using var response = await http.GetAsync(url, ct);
         response.EnsureSuccessStatusCode();
@@ -41,9 +43,30 @@ public sealed class TvMazeService(HttpClient http)
             .ToList();
     }
 
+    /// <summary>Alternate titles ("akas") of a show — e.g. "Shingeki no Kyojin" for Attack on Titan.</summary>
+    public async Task<IReadOnlyList<string>> GetAliasesAsync(int showId, CancellationToken ct = default)
+    {
+        var http = httpFactory.CreateClient();
+        var url = $"https://api.tvmaze.com/shows/{showId}/akas";
+        using var response = await http.GetAsync(url, ct);
+        if (!response.IsSuccessStatusCode)
+            return [];
+        var akas = await response.Content.ReadFromJsonAsync<List<AkaDto>>(Json, ct) ?? [];
+        return akas
+            .Select(a => a.Name?.Trim() ?? "")
+            .Where(n => n.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private sealed class SearchResult
     {
         public ShowDto? Show { get; set; }
+    }
+
+    private sealed class AkaDto
+    {
+        public string? Name { get; set; }
     }
 
     private sealed class ShowDto
