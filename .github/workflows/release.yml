@@ -27,7 +27,11 @@ jobs:
 
       # electron-builder builds the NSIS installer and uploads it (with latest.yml
       # and the blockmap) to a draft GitHub release for this tag — publish it manually.
+      # The repository secrets OPENSUBTITLES_API_KEY and TMDB_API_KEY become the
+      # build's built-in provider keys (empty when the secret is not set).
       - name: Package and upload draft release
-        run: dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
+        run: dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true "-p:OpenSubtitlesApiKey=$env:OPENSUBTITLES_API_KEY" "-p:TmdbApiKey=$env:TMDB_API_KEY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}

@@ -66,6 +66,27 @@ public class SubtitleValidatorTests
         Assert.False(SubtitleValidator.LooksLikeSubtitle(Bytes(new string('a', 100)), ".srt"));
 }
 
+public class BuiltInKeyTests
+{
+    [Fact]
+    public void User_key_wins_over_the_built_in_one()
+    {
+        var settings = new ProviderSettings { ApiKey = "  user-key  " };
+        Assert.Equal("user-key", settings.ResolveApiKey("built-in"));
+    }
+
+    [Fact]
+    public void Built_in_key_is_the_fallback()
+    {
+        var settings = new ProviderSettings { ApiKey = "   " };
+        Assert.Equal("built-in", settings.ResolveApiKey("built-in"));
+    }
+
+    [Fact]
+    public void No_key_anywhere_resolves_empty() =>
+        Assert.Equal("", new ProviderSettings().ResolveApiKey(""));
+}
+
 public class ProviderHealthTests
 {
     [Fact]

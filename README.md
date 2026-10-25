@@ -32,12 +32,16 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 ## Quick start
 
 1. **Add videos** — drop files or a folder into the window.
-2. *(Optional)* Open **Settings** (gear icon) to pick your languages and add provider API keys:
-   - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota.
+2. *(Optional)* Open **Settings** (gear icon) to pick your languages and add provider API keys.
+   Official builds ship **built-in keys for OpenSubtitles and TMDB**, so those work out of the
+   box; a key you enter yourself always takes precedence.
+   - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota (the built-in key alone is capped at ~5 downloads/day per IP).
    - SubDL: grab a free key from your [SubDL panel](https://subdl.com/panel/api).
    - SubSource: create a free key from your [SubSource profile](https://subsource.net/profile) (API tab).
    - TMDB (for renaming): create a free key in your [TMDB API settings](https://www.themoviedb.org/settings/api) — the v3 key and the v4 read-access token both work.
    - Gestdown and TVMaze need nothing; Gestdown is enabled by default (TV shows only).
+   - SubDL and SubSource have no built-in key on purpose: their quotas are per key, so a
+     shared key would be exhausted across all installs.
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video.
 4. **Rename episodes** (pencil icon): search your show, check the proposed names, click *Rename*.
 
@@ -94,6 +98,10 @@ Releases are built by CI only — one release, one build. Never upload release a
 local machine: a second build on the same release can leave `latest.yml` describing a
 different installer (sha512 mismatch), which breaks auto-update.
 
+0. One-time setup: the repository secrets `OPENSUBTITLES_API_KEY` and `TMDB_API_KEY`
+   (GitHub → Settings → Secrets and variables → Actions) become the build's built-in provider
+   keys. They are injected at publish time as MSBuild properties and are never committed;
+   dev builds have no built-in keys and fall back to user-entered ones.
 1. Bump `<Version>` in `src/Subtitall/Subtitall.csproj` (semver), commit (`🔖 Release vX.Y.Z`) and push.
 2. Tag that commit and push the tag:
 

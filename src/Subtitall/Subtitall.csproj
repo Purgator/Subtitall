@@ -21,4 +21,11 @@
     <InternalsVisibleTo Include="Subtitall.Tests" />
   </ItemGroup>
 
+  <!-- Built-in API keys, injected by CI (-p:OpenSubtitlesApiKey=… -p:TmdbApiKey=…).
+       Empty in dev builds — the app then requires user-entered keys, as before. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="BuiltInOpenSubtitlesKey" Value="$(OpenSubtitlesApiKey)" />
+    <AssemblyMetadata Include="BuiltInTmdbKey" Value="$(TmdbApiKey)" />
+  </ItemGroup>
+
 </Project>

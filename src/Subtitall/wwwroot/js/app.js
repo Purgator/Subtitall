@@ -79,7 +79,7 @@ function activeProviders() {
   if (!s) return [];
   return [
     s.gestdown?.enabled ? "Gestdown" : null,
-    s.openSubtitles?.enabled && s.openSubtitles?.apiKey ? "OpenSubtitles" : null,
+    s.openSubtitles?.enabled && (s.openSubtitles?.apiKey || state.meta?.builtInKeys?.openSubtitles) ? "OpenSubtitles" : null,
     s.subDl?.enabled && s.subDl?.apiKey ? "SubDL" : null,
     s.subSource?.enabled && s.subSource?.apiKey ? "SubSource" : null,
   ].filter(Boolean);
@@ -650,7 +650,7 @@ function renderSettingsView(main) {
             <span class="note">movies + TV — <a href="https://www.opensubtitles.com/en/consumers" target="_blank">get a free API key</a></span>
           </div>
           <div class="fields">
-            <div class="settings-row"><label>API key</label><input class="input" id="os-key" value="${esc(s.openSubtitles.apiKey)}" placeholder="Required"></div>
+            <div class="settings-row"><label>API key</label><input class="input" id="os-key" value="${esc(s.openSubtitles.apiKey)}" placeholder="${state.meta?.builtInKeys?.openSubtitles ? "Using built-in key — paste yours to override" : "Required"}"></div>
             <div class="settings-row"><label>Username</label><input class="input" id="os-user" value="${esc(s.openSubtitles.username)}" placeholder="Optional — raises download quota"></div>
             <div class="settings-row"><label>Password</label><input class="input" id="os-pass" type="password" value="${esc(s.openSubtitles.password)}" placeholder="Optional"></div>
           </div>
@@ -690,7 +690,7 @@ function renderSettingsView(main) {
             <span class="note"><a href="https://www.themoviedb.org/settings/api" target="_blank">get a free API key</a> (v3 key or v4 token)</span>
           </div>
           <div class="fields">
-            <div class="settings-row"><label>API key</label><input class="input" id="tmdb-key" value="${esc(s.tmdb.apiKey)}" placeholder="Required"></div>
+            <div class="settings-row"><label>API key</label><input class="input" id="tmdb-key" value="${esc(s.tmdb.apiKey)}" placeholder="${state.meta?.builtInKeys?.tmdb ? "Using built-in key — paste yours to override" : "Required"}"></div>
           </div>
         </div>
       </div>

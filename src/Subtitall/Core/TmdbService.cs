@@ -20,7 +20,7 @@ public sealed class TmdbService(IHttpClientFactory httpFactory, SettingsService 
 
     public bool IsConfigured => settings.Current.Tmdb.Enabled && ApiKey.Length > 0;
 
-    private string ApiKey => settings.Current.Tmdb.ApiKey.Trim();
+    private string ApiKey => settings.Current.Tmdb.ResolveApiKey(BuiltInKeys.Tmdb);
 
     public async Task<IReadOnlyList<TvShow>> SearchShowsAsync(string query, CancellationToken ct = default)
     {
