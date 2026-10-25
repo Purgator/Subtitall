@@ -61,12 +61,16 @@ dotnet test
 ### Package a Windows installer
 
 ```bash
+rm -rf src/Subtitall/bin/Release/net10.0/win-x64/publish
 dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
 ```
 
 The NSIS installer and its `.blockmap` land in `src/Subtitall/bin/Release/net10.0/win-x64/publish/`.
-Without a `GH_TOKEN` environment variable the final upload step fails — that's fine for a local
-build; the installer is already produced at that point.
+Delete that folder first: `dotnet publish` does not clean it, and stale files from a previous
+publish would be packed into the installer. Without a `GH_TOKEN` environment variable the final
+upload step fails — that's fine for a local build; the installer is already produced at that
+point. Never set `GH_TOKEN` for a local package: release assets are built and uploaded by CI
+only (see Releasing).
 
 ### Architecture
 
@@ -82,16 +86,23 @@ Settings are stored in `%APPDATA%/Subtitall/settings.json`.
 
 ### Releasing
 
+Releases are built by CI only — one release, one build. Never upload release assets from a
+local machine: a second build on the same release can leave `latest.yml` describing a
+different installer (sha512 mismatch), which breaks auto-update.
+
 1. Bump `<Version>` in `src/Subtitall/Subtitall.csproj` (semver), commit (`🔖 Release vX.Y.Z`) and push.
-2. Package with your GitHub token set — electron-builder builds the installer and uploads it
-   (with `latest.yml` and the `.blockmap`) to a **draft** GitHub release tagged `vX.Y.Z`:
+2. Tag that commit and push the tag:
 
    ```bash
-   GH_TOKEN=$(gh auth token) dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true
+   git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 
-3. Review the draft on GitHub, add release notes, and **publish** it — auto-update ignores drafts,
-   and publishing creates the `vX.Y.Z` tag.
+   The tag triggers `.github/workflows/release.yml`, which runs the tests, builds the NSIS
+   installer and uploads it (with `latest.yml` and the `.blockmap`) to a **draft** GitHub
+   release for `vX.Y.Z`.
+3. Review the draft on GitHub, add release notes, and **publish** it. Auto-update ignores
+   drafts — installed apps only see the release once it is published. Publishing does not
+   re-trigger CI (the tag already exists).
 
 ## License
 

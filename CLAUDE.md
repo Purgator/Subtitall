@@ -14,8 +14,12 @@ Rules for AI agents (and humans) working on this repository.
 4. **Semver releases.** Publish a GitHub release when a meaningful set of features/fixes has
    accumulated — follow the "Releasing" section of the README exactly. `<Version>` in
    `Subtitall.csproj` must always equal the latest tag (electron-updater compares them).
-   With `GH_TOKEN` set, `dotnet publish` uploads the installer + `latest.yml` + blockmap to a
-   draft release itself; publishing the draft creates the tag and activates auto-update.
+   Release assets come from CI **only**: pushing the `vX.Y.Z` tag triggers
+   `.github/workflows/release.yml`, which uploads the installer + `latest.yml` + blockmap to a
+   draft release. Never upload release assets from a local build (never set `GH_TOKEN` on
+   `dotnet publish`) — a second build on the same release breaks the `latest.yml` sha512 and
+   with it auto-update. A draft is invisible to auto-update: **publishing the draft is part of
+   releasing**, not optional — installed apps stay on the old version until it is published.
 5. **English only** in the UI, code, comments and docs.
 6. **Keep it lightweight.** The frontend is vanilla HTML/CSS/JS on purpose — no frameworks,
    no build step, no npm dependencies for the UI.
@@ -33,6 +37,17 @@ Electron/electron-builder settings live in the csproj (`<ElectronVersion>`) and
 `src/Subtitall/Properties/electron-builder.json` (NSIS target + GitHub publish config) —
 **not** in an `electron.manifest.json` (that's the dead legacy Electron.NET 23.x line;
 this project uses the maintained `ElectronNET.Core` packages).
+
+Packaging facts (verified 2026-10; do not "fix" these):
+
+- The effective electron-builder `appId` is always `subtitall`: ElectronNET.Core's publish
+  target passes `-c.appId` (the lowercased project name) on the CLI, overriding whatever
+  `electron-builder.json` says. The json's `appId` is kept at `subtitall` so the file matches
+  reality. Changing the effective appId would change the NSIS install GUID and orphan
+  existing installs — don't.
+- `dotnet publish` does not clean the publish folder; stale files from a previous publish get
+  packed into the installer (everything under `publish/bin` ships via `extraResources`).
+  Delete the publish folder before packaging locally. CI builds from a clean checkout.
 
 ## Architecture map
 
