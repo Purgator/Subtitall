@@ -8,12 +8,16 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<TvMazeService>();
+builder.Services.AddSingleton<TmdbService>();
+builder.Services.AddSingleton<ShowMetadataService>();
 builder.Services.AddSingleton<ShowAliasResolver>();
 builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<LibraryService>();
+builder.Services.AddSingleton<ProviderHealth>();
 builder.Services.AddSingleton<ISubtitleProvider, OpenSubtitlesProvider>();
 builder.Services.AddSingleton<ISubtitleProvider, SubDlProvider>();
 builder.Services.AddSingleton<ISubtitleProvider, GestdownProvider>();
+builder.Services.AddSingleton<ISubtitleProvider, SubSourceProvider>();
 builder.Services.AddSingleton<SubtitleSearchService>();
 builder.Services.AddSingleton<RenameService>();
 builder.Services.AddSingleton<EventBus>();

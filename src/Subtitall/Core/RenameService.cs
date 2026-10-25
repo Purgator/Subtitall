@@ -9,7 +9,7 @@ public sealed record RenameProposal(string ItemId, string OldName, string NewNam
 
 public sealed record RenameOutcome(string ItemId, bool Renamed, string? Error);
 
-/// <summary>Builds and applies episode rename proposals from TVMaze episode data.</summary>
+/// <summary>Builds and applies episode rename proposals from the metadata sources' episode data.</summary>
 public sealed class RenameService(LibraryService library)
 {
     /// <summary>Proposes "{Show} - S01E02 - Title.ext" names for the given items.</summary>
@@ -87,7 +87,7 @@ public sealed class RenameService(LibraryService library)
 
             string? problem = null;
             if (episode is null)
-                problem = $"Episode S{season:00}E{number:00} not found on TVMaze";
+                problem = $"Episode S{season:00}E{number:00} not found on the metadata sources";
             else
             {
                 var newPath = Path.Combine(Path.GetDirectoryName(item.Path) ?? "", newName);

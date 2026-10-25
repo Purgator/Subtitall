@@ -86,6 +86,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
                 ReleaseName = attributes.Release ?? attributes.Files?.FirstOrDefault()?.FileName ?? "",
                 Downloads = attributes.DownloadCount ?? 0,
                 HashMatch = attributes.MoviehashMatch ?? false,
+                HearingImpaired = attributes.HearingImpaired ?? false,
             });
         }
         return candidates;
@@ -242,6 +243,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         public string? Release { get; set; }
         public int? DownloadCount { get; set; }
         public bool? MoviehashMatch { get; set; }
+        public bool? HearingImpaired { get; set; }
         public List<SubtitleFileDto>? Files { get; set; }
     }
 

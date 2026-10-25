@@ -37,4 +37,25 @@ public static class Languages
         "ZH_BG" => "zh-tw",
         _ => code.ToLowerInvariant(),
     };
+
+    /// <summary>
+    /// Maps an internal code to SubSource's lowercase language names
+    /// ("farsi_persian", "brazilian_portuguese", "chinese_bg_code"…).
+    /// </summary>
+    public static string ToSubSource(string code) => code switch
+    {
+        "pt-br" => "brazilian_portuguese",
+        "pt-pt" => "portuguese",
+        "zh-cn" or "zh-tw" => "chinese_bg_code",
+        "fa" => "farsi_persian",
+        "el" => "greek",
+        "he" => "hebrew",
+        "ja" => "japanese",
+        "ko" => "korean",
+        "ar" => "arabic",
+        _ => NameOf(code).ToLowerInvariant(),
+    };
+
+    private static string NameOf(string code) =>
+        All.FirstOrDefault(l => l.Code == code).Name ?? code;
 }

@@ -17,6 +17,9 @@ public sealed record SubtitleCandidate
     /// <summary>Exact file match via moviehash — the strongest possible signal.</summary>
     public bool HashMatch { get; init; }
 
+    /// <summary>Subtitle for the deaf/hard-of-hearing (sound cues in brackets).</summary>
+    public bool HearingImpaired { get; init; }
+
     /// <summary>Ranking score, filled in by the search orchestrator.</summary>
     public double Score { get; set; }
 }

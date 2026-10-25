@@ -55,9 +55,12 @@ Packaging facts (verified 2026-10; do not "fix" these):
   - `FilenameParser` (scene/anime name parsing), `LibraryService` (linked videos),
     `SettingsService` (%APPDATA%/Subtitall/settings.json), `SubtitleNaming` (`video.<lang>.srt`),
     `MovieHash` (OpenSubtitles 64 KiB head+tail hash), `TextMatch` (token similarity),
-    `TvMazeService`, `RenameService`, `SubtitleSearchService` (fan-out + ranking).
+    `TvMazeService` + `TmdbService` + `ShowMetadataService` (merged metadata sources),
+    `RenameService`, `SubtitleSearchService` (fan-out + ranking), `ProviderHealth`
+    (circuit breaker + success-rate ranking input), `SubtitleValidator` (payload sanity check).
   - `Core/Providers/` — `ISubtitleProvider` implementations: `GestdownProvider` (keyless, TV),
-    `OpenSubtitlesProvider` (Api-Key + optional user JWT), `SubDlProvider` (key, zip payloads).
+    `OpenSubtitlesProvider` (Api-Key + optional user JWT), `SubDlProvider` (key, zip payloads),
+    `SubSourceProvider` (key, X-API-Key header, zip payloads).
 - `src/Subtitall/Api/` — minimal-API endpoints (`Endpoints.cs`), `EventBus` (SSE broadcast),
   `BatchSearchService` (one batch search at a time, progress events).
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
@@ -76,6 +79,18 @@ Packaging facts (verified 2026-10; do not "fix" these):
   magic) except season-pack `unpack_files` URLs which are raw files; needs a browser-ish User-Agent.
 - **Gestdown**: HTTP 423 = show being indexed, retry later; 2-letter language codes only
   (3-letter codes miss silently); ~50 req/min/IP; TV shows only (needs season/episode).
+- **SubSource** (verified 2026-10): base `https://api.subsource.net/api/v1`, key in `X-API-Key`
+  header, free tier 60 req/min / 7200/day. `GET /movies/search?searchType=text&q=…[&season=N]`
+  (TV ids are per show-season), `GET /subtitles?language=…&movieId=…[&seasonNumber&episodeNumber]`,
+  `GET /subtitles/{id}/download` (zip or raw; some old Subscene uploads are RAR — unsupported,
+  skip to next candidate). Language names are lowercase full names with intentional quirks:
+  `farsi_persian`, `brazilian_portuguese`, `chinese_bg_code` (`Languages.ToSubSource`).
+  Ids arrive as JSON numbers *or* strings (`FlexibleStringConverter`).
+- **TMDB**: v3 key as `api_key` query param, v4 token (starts `eyJ`) as Bearer header — both
+  accepted in one settings field. Episodes come one season at a time (`/tv/{id}/season/{n}`);
+  `/tv/{id}/alternative_titles` wraps TV titles in `results` (movies use `titles`). Metadata
+  only — TMDB has no subtitles. Used as an optional second rename source behind keyless TVMaze
+  (`ShowMetadataService` merges by normalized name + premiere year).
 - **TVMaze**: keyless; specials have `number: null` and are NOT season 0; `search/shows` wraps
   results in `{score, show}`; almost every field is nullable. `GET /shows/:id/akas` lists
   alternate titles (romaji anime names, translations); TVMaze search itself matches akas

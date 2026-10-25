@@ -3,13 +3,18 @@ using System.Text.Json.Serialization;
 
 namespace Subtitall.Core;
 
-public sealed record TvShow(int Id, string Name, string? Premiered, string? Network, string? ImageUrl);
+/// <summary>A show as found on a metadata source; Source says which one (TVMaze, TMDB).</summary>
+public sealed record TvShow(
+    int Id, string Name, string? Premiered, string? Network, string? ImageUrl,
+    string Source = TvMazeService.SourceName);
 
 public sealed record TvEpisode(int Season, int Number, string Name, string? Airdate);
 
 /// <summary>TVMaze API client (free, no key required) used for renaming and alias resolution.</summary>
 public sealed class TvMazeService(IHttpClientFactory httpFactory)
 {
+    public const string SourceName = "TVMaze";
+
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<IReadOnlyList<TvShow>> SearchShowsAsync(string query, CancellationToken ct = default)
