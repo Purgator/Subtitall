@@ -62,7 +62,13 @@ this project uses the maintained `ElectronNET.Core` packages).
 - **Gestdown**: HTTP 423 = show being indexed, retry later; 2-letter language codes only
   (3-letter codes miss silently); ~50 req/min/IP; TV shows only (needs season/episode).
 - **TVMaze**: keyless; specials have `number: null` and are NOT season 0; `search/shows` wraps
-  results in `{score, show}`; almost every field is nullable.
+  results in `{score, show}`; almost every field is nullable. `GET /shows/:id/akas` lists
+  alternate titles (romaji anime names, translations); TVMaze search itself matches akas
+  ("Shingeki no Kyojin" finds Attack on Titan) but NOT acronyms ("SnK" finds nothing useful) —
+  acronym matching is ours (`TextMatch.MatchesShowName`).
+- **Anime aliasing**: `ShowAliasResolver` (TVMaze-backed, cached) fills `MediaItem.AlternateTitles`
+  during subtitle search; Gestdown retries its show lookup with those names since Addic7ed only
+  knows English titles. Rename proposals match files against the show name + akas + acronyms.
 
 ## Testing conventions
 

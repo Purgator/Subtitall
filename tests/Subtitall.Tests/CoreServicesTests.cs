@@ -318,6 +318,43 @@ public class RenameServiceTests
     }
 
     [Fact]
+    public void Show_matching_knows_aliases_and_acronyms()
+    {
+        string[] attackOnTitan = ["Attack on Titan", "Shingeki no Kyojin", "L'attaque des Titans"];
+
+        // Romaji filename title matches through the alias list.
+        Assert.True(TextMatch.MatchesShowName("Shingeki no Kyojin", attackOnTitan));
+        // Acronyms of any known name match ("SnK", "AoT").
+        Assert.True(TextMatch.MatchesShowName("SnK", attackOnTitan));
+        Assert.True(TextMatch.MatchesShowName("AoT", attackOnTitan));
+        // Unrelated titles and acronyms still don't.
+        Assert.False(TextMatch.MatchesShowName("Breaking Bad", attackOnTitan));
+        Assert.False(TextMatch.MatchesShowName("BB", attackOnTitan));
+        // Acronym matching never applies to multi-word titles.
+        Assert.False(TextMatch.MatchesShowName("Super new Kids", ["Attack on Titan"]));
+    }
+
+    [Fact]
+    public void Rename_accepts_alias_and_acronym_named_files()
+    {
+        using var dir = new TempDir();
+        var romaji = dir.CreateFile("[Erai-raws] Shingeki no Kyojin - 02 [1080p].mkv");
+        var acronym = dir.CreateFile("SnK.S01E01.1080p.mkv");
+
+        var library = new LibraryService();
+        var items = library.AddPaths([romaji, acronym]);
+        var service = new RenameService(library);
+
+        var proposals = service.BuildProposals(items, "Attack on Titan", Episodes,
+            "{Show} - S{Season}E{Episode} - {Title}",
+            alternateNames: ["Shingeki no Kyojin", "進撃の巨人"]);
+
+        Assert.All(proposals, p => Assert.True(p.CanApply, p.Problem));
+        Assert.Contains(proposals, p => p.NewName == "Attack on Titan - S01E02 - Second One.mkv");
+        Assert.Contains(proposals, p => p.NewName == "Attack on Titan - S01E01 - Pilot.mkv");
+    }
+
+    [Fact]
     public void Missing_episode_title_leaves_clean_name()
     {
         using var dir = new TempDir();
