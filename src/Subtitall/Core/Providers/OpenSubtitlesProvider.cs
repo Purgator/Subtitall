@@ -53,6 +53,13 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
             query["season_number"] = parsed.Season.Value.ToString();
             query["type"] = "episode";
         }
+        else if (parsed.AbsoluteEpisode is int absolute)
+        {
+            // Anime absolute numbering — OpenSubtitles indexes many anime by episode
+            // number without a season, so a bare episode_number narrows the search well.
+            query["episode_number"] = absolute.ToString();
+            query["type"] = "episode";
+        }
         else if (!parsed.IsEpisode)
         {
             query["type"] = "movie";

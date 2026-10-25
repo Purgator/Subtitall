@@ -9,6 +9,7 @@ public sealed record SearchOutcome(
 public sealed class SubtitleSearchService(
     IEnumerable<ISubtitleProvider> providers,
     SettingsService settings,
+    ShowAliasResolver aliases,
     ILogger<SubtitleSearchService> logger)
 {
     /// <summary>Searches all configured providers; returns candidates ranked best-first.</summary>
@@ -17,6 +18,11 @@ public sealed class SubtitleSearchService(
     {
         var config = settings.Current;
         var active = providers.Where(p => p.IsConfigured(config)).ToList();
+
+        // TV shows are often named differently across providers (romaji vs English anime
+        // titles) — resolve the other known names once so providers can fall back to them.
+        if (item.Parsed.IsEpisode && item.AlternateTitles is null)
+            item.AlternateTitles = (await aliases.GetAlternateNamesAsync(item.Parsed.Title, ct)).ToList();
 
         var tasks = active.Select(async provider =>
         {

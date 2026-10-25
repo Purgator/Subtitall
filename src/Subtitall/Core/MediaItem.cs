@@ -15,4 +15,7 @@ public sealed class MediaItem
 
     /// <summary>Language code → subtitle file already present next to the video.</summary>
     public Dictionary<string, bool> Subtitles { get; set; } = [];
+
+    /// <summary>Other names the show is known under (resolved lazily via TVMaze; null = not resolved yet).</summary>
+    public List<string>? AlternateTitles { get; set; }
 }

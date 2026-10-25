@@ -33,6 +33,17 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
             return []; // TV shows only, and absolute anime numbering can't be queried here.
 
         var showId = await GetShowIdAsync(parsed.Title, ct);
+        if (showId is null && item.AlternateTitles is { Count: > 0 } alternates)
+        {
+            // Addic7ed indexes shows under their English title — try the other known names
+            // ("Shingeki no Kyojin" → "Attack on Titan"). Skip non-Latin ones; cap the lookups.
+            foreach (var alternate in alternates.Where(a => a.Any(char.IsAsciiLetter)).Take(4))
+            {
+                showId = await GetShowIdAsync(alternate, ct);
+                if (showId is not null)
+                    break;
+            }
+        }
         if (showId is null)
             return [];
 

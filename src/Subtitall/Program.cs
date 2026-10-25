@@ -7,7 +7,8 @@ using Subtitall.Core.Providers;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpClient();
-builder.Services.AddHttpClient<TvMazeService>();
+builder.Services.AddSingleton<TvMazeService>();
+builder.Services.AddSingleton<ShowAliasResolver>();
 builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<LibraryService>();
 builder.Services.AddSingleton<ISubtitleProvider, OpenSubtitlesProvider>();
