@@ -1,7 +1,7 @@
 # Subtitall
 
 [![Latest release](https://img.shields.io/github/v/release/Purgator/Subtitall)](https://github.com/Purgator/Subtitall/releases/latest)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming.
 
@@ -118,4 +118,4 @@ different installer (sha512 mismatch), which breaks auto-update.
 
 ## License
 
-[GPL-3.0](LICENSE)
+[GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`)

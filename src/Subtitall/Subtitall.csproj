@@ -9,6 +9,7 @@
     <Authors>Purgator</Authors>
     <Product>Subtitall</Product>
     <Description>Find and download subtitles for your movies, TV shows and anime.</Description>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
     <ElectronVersion>39.2.0</ElectronVersion>
   </PropertyGroup>
 
