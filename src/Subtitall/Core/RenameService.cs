@@ -5,11 +5,17 @@ namespace Subtitall.Core;
 public sealed record RenameProposal(string ItemId, string OldName, string NewName, string? Problem)
 {
     public bool CanApply => Problem is null && !string.Equals(OldName, NewName, StringComparison.Ordinal);
+
+    /// <summary>Why the season was chosen when the filename didn't spell it out.</summary>
+    public string? Note { get; init; }
 }
 
 public sealed record RenameOutcome(string ItemId, bool Renamed, string? Error);
 
-/// <summary>Builds and applies episode rename proposals from the metadata sources' episode data.</summary>
+/// <summary>
+/// Builds and applies episode rename proposals from the metadata sources' episode data. Files
+/// are matched to episodes the same way the subtitle search sees them (<see cref="EpisodeGuesser"/>).
+/// </summary>
 public sealed class RenameService(LibraryService library)
 {
     /// <summary>Proposes "{Show} - S01E02 - Title.ext" names for the given items.</summary>
@@ -26,63 +32,56 @@ public sealed class RenameService(LibraryService library)
         if (alternateNames is not null)
             knownNames.AddRange(alternateNames);
 
-        // Absolute (anime) numbering maps onto regular episodes ordered by season/number.
-        var ordered = episodes
+        var bySeasonEpisode = episodes
             .Where(e => e.Season > 0)
-            .OrderBy(e => e.Season).ThenBy(e => e.Number)
-            .ToList();
-        var bySeasonEpisode = ordered
             .GroupBy(e => (e.Season, e.Number))
             .ToDictionary(g => g.Key, g => g.First());
+
+        // Guard against renaming files that belong to a different show
+        // (e.g. an anime with absolute numbering sitting in the same list).
+        var matching = items.Where(i => TextMatch.MatchesShowName(i.Parsed.Title, knownNames)).ToList();
+        var guesses = EpisodeGuesser.Guess(
+            matching.Select(i => new GuessInput(i.Parsed, i.SeasonOverride)).ToList(), episodes);
+        var guessById = matching.Zip(guesses).ToDictionary(pair => pair.First.Id, pair => pair.Second);
 
         var proposals = new List<RenameProposal>();
         foreach (var item in items)
         {
             var parsed = item.Parsed;
 
-            // Guard against renaming files that belong to a different show
-            // (e.g. an anime with absolute numbering sitting in the same list).
-            if (!TextMatch.MatchesShowName(parsed.Title, knownNames))
+            if (!guessById.TryGetValue(item.Id, out var guess))
             {
                 proposals.Add(new RenameProposal(item.Id, item.FileName, item.FileName,
                     $"Doesn't look like an episode of “{showName}”"));
                 continue;
             }
 
-            TvEpisode? episode = null;
-            int? season = parsed.Season, number = parsed.Episode;
-
-            if (season.HasValue && number.HasValue)
-            {
-                bySeasonEpisode.TryGetValue((season.Value, number.Value), out episode);
-            }
-            else if (parsed.AbsoluteEpisode is int abs && abs >= 1 && abs <= ordered.Count)
-            {
-                episode = ordered[abs - 1];
-                season = episode.Season;
-                number = episode.Number;
-            }
-
-            if (!season.HasValue || !number.HasValue)
+            if (guess is null)
             {
                 proposals.Add(new RenameProposal(item.Id, item.FileName, item.FileName,
-                    "No season/episode detected in the filename"));
+                    parsed.AbsoluteEpisode.HasValue
+                        ? $"Episode {parsed.AbsoluteEpisode} doesn't fit any season — pick the season"
+                        : "No season/episode detected in the filename"));
                 continue;
             }
 
+            int season = guess.Season, number = guess.Episode;
+            bySeasonEpisode.TryGetValue((season, number), out var episode);
+            var note = guess.Confidence == GuessConfidence.Explicit ? null : guess.Reason;
+
             // Multi-episode files ("S01E01E02") keep both markers and join the titles.
-            var episodeText = number.Value.ToString("00");
+            var episodeText = number.ToString("00");
             var title = episode?.Name ?? "";
-            if (parsed.EndEpisode is int endNumber && endNumber > number)
+            if (guess.EndEpisode is int endNumber && endNumber > number)
             {
                 episodeText = $"{number:00}-E{endNumber:00}";
-                if (bySeasonEpisode.TryGetValue((season.Value, endNumber), out var lastEpisode) &&
+                if (bySeasonEpisode.TryGetValue((season, endNumber), out var lastEpisode) &&
                     lastEpisode.Name.Length > 0)
                     title = title.Length > 0 ? $"{title} & {lastEpisode.Name}" : lastEpisode.Name;
             }
 
             var extension = Path.GetExtension(item.Path);
-            var newName = ApplyTemplate(template, showName, season.Value, episodeText, title) + extension;
+            var newName = ApplyTemplate(template, showName, season, episodeText, title) + extension;
             newName = SanitizeFileName(newName);
 
             string? problem = null;
@@ -95,7 +94,7 @@ public sealed class RenameService(LibraryService library)
                     problem = "A file with the new name already exists";
             }
 
-            proposals.Add(new RenameProposal(item.Id, item.FileName, newName, problem));
+            proposals.Add(new RenameProposal(item.Id, item.FileName, newName, problem) { Note = note });
         }
         return FlagDuplicateTargets(proposals);
     }

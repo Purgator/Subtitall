@@ -83,6 +83,8 @@ public sealed class LibraryService
             _byPath.Remove(item.Path);
             item.Path = Path.GetFullPath(newPath);
             item.Parsed = FilenameParser.Parse(item.Path);
+            // The new name is parsed afresh; detection re-runs for it (see MediaDetectionService).
+            item.Guess = null;
             _byPath[item.Path] = item;
         }
     }

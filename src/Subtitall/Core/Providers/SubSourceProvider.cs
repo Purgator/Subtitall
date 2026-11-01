@@ -31,7 +31,7 @@ public sealed class SubSourceProvider(IHttpClientFactory httpFactory) : ISubtitl
     public async Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(
         MediaItem item, string language, AppSettings settings, CancellationToken ct)
     {
-        var parsed = item.Parsed;
+        var parsed = item.Effective;
         if (parsed.IsEpisode && (!parsed.Season.HasValue || !parsed.Episode.HasValue))
             return []; // Absolute anime numbering can't be queried here.
 

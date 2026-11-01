@@ -7,6 +7,7 @@ public sealed class BatchSearchService(
     LibraryService library,
     SettingsService settings,
     SubtitleSearchService search,
+    MediaDetectionService detection,
     EventBus events,
     ILogger<BatchSearchService> logger)
 {
@@ -53,6 +54,9 @@ public sealed class BatchSearchService(
         events.Publish("batch-started", new { total });
         try
         {
+            // Providers need the show and season/episode settled first.
+            await detection.EnsureAsync(items, ct);
+
             foreach (var item in items)
             {
                 foreach (var language in languages)

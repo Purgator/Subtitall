@@ -32,15 +32,20 @@ public static class Endpoints
             return Results.Ok(library.GetAll().Select(ToDto));
         });
 
-        api.MapPost("/library/add", (AddPathsRequest request, LibraryService library, SettingsService settings, EventBus events) =>
+        api.MapPost("/library/add", (
+            AddPathsRequest request, LibraryService library, SettingsService settings,
+            MediaDetectionService detection, EventBus events) =>
         {
             var added = library.AddPaths(request.Paths ?? []);
             library.RefreshSubtitleStatus(settings.Current.Languages);
             events.Publish("library-changed");
+            detection.Queue(added);
             return Results.Ok(new { added = added.Count, items = library.GetAll().Select(ToDto) });
         });
 
-        api.MapPost("/library/browse", async (BrowseRequest request, LibraryService library, SettingsService settings, EventBus events) =>
+        api.MapPost("/library/browse", async (
+            BrowseRequest request, LibraryService library, SettingsService settings,
+            MediaDetectionService detection, EventBus events) =>
         {
             if (!ElectronBridge.IsActive)
                 return Results.Problem("File dialogs require the desktop app", statusCode: 501);
@@ -64,11 +69,47 @@ public static class Endpoints
                 };
 
             var paths = await Electron.Dialog.ShowOpenDialogAsync(window, options);
-            var added = paths is { Length: > 0 } ? library.AddPaths(paths).Count : 0;
+            var addedItems = paths is { Length: > 0 } ? library.AddPaths(paths) : [];
             library.RefreshSubtitleStatus(settings.Current.Languages);
-            if (added > 0)
+            if (addedItems.Count > 0)
+            {
                 events.Publish("library-changed");
-            return Results.Ok(new { added, items = library.GetAll().Select(ToDto) });
+                detection.Queue(addedItems);
+            }
+            return Results.Ok(new { added = addedItems.Count, items = library.GetAll().Select(ToDto) });
+        });
+
+        // ---- Detection (which show / which season a file is) -----------------
+        api.MapPost("/library/detect", async (MediaDetectionService detection, CancellationToken ct) =>
+        {
+            await detection.RunAllAsync(ct);
+            return Results.NoContent();
+        });
+
+        // The user picked the show for every file parsed to the given title.
+        api.MapPost("/library/show", async (
+            ChooseShowRequest request, LibraryService library, ShowDetectionService shows,
+            MediaDetectionService detection, CancellationToken ct) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Title) || request.Show is null)
+                return Results.BadRequest(new { message = "A title and a show are required" });
+            shows.Choose(request.Title, request.Show);
+            var affected = library.GetAll()
+                .Where(i => string.Equals(i.Parsed.Title.Trim(), request.Title.Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            await detection.RunAsync(affected, ct);
+            return Results.Ok(affected.Select(ToDto));
+        });
+
+        // The user set the season for files whose names carry only an episode number.
+        api.MapPost("/library/season", async (
+            SetSeasonRequest request, LibraryService library, MediaDetectionService detection, CancellationToken ct) =>
+        {
+            var items = (request.ItemIds ?? []).Select(library.Get).OfType<MediaItem>().ToList();
+            foreach (var item in items)
+                item.SeasonOverride = request.Season is > 0 ? request.Season : null;
+            await detection.RunAsync(items, ct);
+            return Results.Ok(items.Select(ToDto));
         });
 
         api.MapDelete("/library/{id}", (string id, LibraryService library, EventBus events) =>
@@ -115,11 +156,13 @@ public static class Endpoints
             Results.Ok(new { running = batch.IsRunning }));
 
         api.MapGet("/subtitles/candidates", async (
-            string itemId, string language, LibraryService library, SubtitleSearchService search, CancellationToken ct) =>
+            string itemId, string language, LibraryService library, SubtitleSearchService search,
+            MediaDetectionService detection, CancellationToken ct) =>
         {
             var item = library.Get(itemId);
             if (item is null)
                 return Results.NotFound();
+            await detection.EnsureAsync([item], ct);
             var candidates = await search.SearchAsync(item, language, ct);
             return Results.Ok(candidates);
         });
@@ -153,29 +196,46 @@ public static class Endpoints
         api.MapGet("/rename/shows", async (string q, ShowMetadataService metadata, CancellationToken ct) =>
             Results.Ok(await metadata.SearchShowsAsync(q, ct)));
 
+        // Proposals come from each file's detected show — the same detection the subtitle
+        // search uses — so the Rename tab works on the same list as the Files tab.
         api.MapPost("/rename/proposals", async (
-            ProposalsRequest request, LibraryService library, ShowMetadataService metadata,
+            ProposalsRequest request, LibraryService library, MediaDetectionService detection,
             RenameService rename, SettingsService settings, CancellationToken ct) =>
         {
-            var source = request.Source ?? TvMazeService.SourceName;
-            var episodesTask = metadata.GetEpisodesAsync(source, request.ShowId, request.ShowName, ct);
-            var aliasesTask = metadata.GetAliasesAsync(source, request.ShowId, request.ShowName, ct);
-            await Task.WhenAll(episodesTask, aliasesTask);
             var items = request.ItemIds is { Count: > 0 }
                 ? request.ItemIds.Select(library.Get).OfType<MediaItem>().ToList()
                 : library.GetAll();
-            var proposals = rename.BuildProposals(
-                items, request.ShowName, episodesTask.Result, settings.Current.RenameTemplate, aliasesTask.Result);
-            return Results.Ok(proposals);
+            await detection.EnsureAsync(items, ct);
+
+            var proposals = new List<RenameProposal>();
+            foreach (var group in items.GroupBy(i => i.Detection?.Show is { } s ? ShowDetectionService.Key(s.Show) : ""))
+            {
+                var show = group.First().Detection?.Show;
+                if (show is null)
+                {
+                    proposals.AddRange(group.Select(i => new RenameProposal(i.Id, i.FileName, i.FileName,
+                        !i.Parsed.IsEpisode ? "Not a TV episode"
+                        : i.Detection is null ? "Show not detected yet"
+                        : i.Detection.Status == DetectionStatus.Ambiguous ? "Several shows match — pick one"
+                        : "Show not found — pick it")));
+                    continue;
+                }
+                proposals.AddRange(rename.BuildProposals(
+                    group.ToList(), show.Show.Name, show.Episodes, settings.Current.RenameTemplate, show.Aliases));
+            }
+            var order = items.Select((i, index) => (i.Id, index)).ToDictionary(p => p.Id, p => p.index);
+            return Results.Ok(proposals.OrderBy(p => order[p.ItemId]).ToList());
         });
 
         api.MapPost("/rename/apply", (
             ApplyRenameRequest request, RenameService rename, LibraryService library,
-            SettingsService settings, EventBus events) =>
+            SettingsService settings, MediaDetectionService detection, EventBus events) =>
         {
             var outcomes = rename.Apply(request.Proposals ?? []);
             library.RefreshSubtitleStatus(settings.Current.Languages);
             events.Publish("library-changed");
+            // Renamed files parse differently now (explicit season/episode) — refresh their guesses.
+            detection.Queue(outcomes.Where(o => o.Renamed).Select(o => library.Get(o.ItemId)).OfType<MediaItem>());
             return Results.Ok(outcomes);
         });
 
@@ -237,9 +297,34 @@ public static class Endpoints
             absoluteEpisode = item.Parsed.AbsoluteEpisode,
             year = item.Parsed.Year,
             releaseGroup = item.Parsed.ReleaseGroup,
+            seasonHint = item.Parsed.SeasonHint,
+            finalSeasonHint = item.Parsed.FinalSeasonHint,
             isEpisode = item.Parsed.IsEpisode,
         },
+        // Season/episode as the search and rename features will use them.
+        effective = new { season = item.Effective.Season, episode = item.Effective.Episode, endEpisode = item.Effective.EndEpisode },
+        guess = item.Guess is { } g ? new { g.Season, g.Episode, confidence = g.Confidence.ToString().ToLowerInvariant(), g.Reason } : null,
+        seasonOverride = item.SeasonOverride,
+        detection = item.Detection is { } d ? new
+        {
+            d.Title,
+            status = d.Status switch
+            {
+                DetectionStatus.Resolved => "resolved",
+                DetectionStatus.Ambiguous => "ambiguous",
+                _ => "notFound",
+            },
+            d.ChosenByUser,
+            show = d.Show is { } s ? ShowDto(s.Show) : null,
+            seasons = d.Show?.Seasons ?? [],
+            candidates = d.Candidates.Select(ShowDto),
+        } : null,
         subtitles = item.Subtitles,
+    };
+
+    private static object ShowDto(TvShow show) => new
+    {
+        show.Id, show.Name, show.Premiered, show.Network, show.ImageUrl, show.Source,
     };
 
     public sealed record AddPathsRequest(List<string>? Paths);
@@ -247,7 +332,9 @@ public static class Endpoints
     public sealed record RevealRequest(string ItemId);
     public sealed record SearchRequest(List<string>? ItemIds);
     public sealed record DownloadRequest(string ItemId, SubtitleCandidate Candidate);
-    public sealed record ProposalsRequest(int ShowId, string ShowName, List<string>? ItemIds, string? Source);
+    public sealed record ProposalsRequest(List<string>? ItemIds);
+    public sealed record ChooseShowRequest(string Title, TvShow? Show);
+    public sealed record SetSeasonRequest(List<string>? ItemIds, int? Season);
     public sealed record ApplyRenameRequest(List<RenameProposal>? Proposals);
 }
 

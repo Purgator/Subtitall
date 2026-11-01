@@ -40,7 +40,7 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
     {
         // Params must be alphabetically sorted, lowercase, with '+' for spaces (API best practice
         // — unsorted params cause redirects that can drop the Api-Key header).
-        var parsed = item.Parsed;
+        var parsed = item.Effective;
         var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
         {
             ["languages"] = language.ToLowerInvariant(),

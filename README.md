@@ -10,7 +10,8 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 ## Features
 
 - 🎬 **Link videos your way** — drag & drop files or folders anywhere in the window, or use the Add buttons. Folders are scanned recursively.
-- 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / anime absolute numbering, year and release group are detected automatically.
+- 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / `E02` / anime absolute numbering, year and release group are detected automatically, including season markers written into the title (`Show The Final Season - 15`, `Show Season 3 - 05`, `Show 2nd Season - 07`).
+- 🔮 **Season guessing** — files that carry only an episode number get their season worked out: from a season named in the title ("The Final Season" = the show's last one), from the other files of the same show in your list (`S04E29` next to `- 15` means S04E15), from the show's episode list (an episode 26 only fits the season that has 26 episodes), or by mapping absolute anime numbering onto seasons (`- 59` → S03E22). A guess is marked as such and explains itself; when it is only a plausible default you can set the season yourself, for the whole show in one go.
 - 🌍 **Multiple languages** — pick any number of subtitle languages; each is saved as `video.<lang>.srt` next to the video so every media player picks it up.
 - 🔎 **Four subtitle sources**
   - **Gestdown** (Addic7ed mirror) — TV shows, works out of the box, no account needed
@@ -19,7 +20,8 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
   - **SubSource** (hosts the former Subscene archive) — movies + TV, free API key
 - 🏆 **Best match wins** — results are ranked (exact file hash match, release-name similarity, popularity, hearing-impaired flag, provider reliability) and the best one downloads automatically. Prefer choosing yourself? Click a language chip to pick from the full list.
 - 🛡️ **Built for reliability** — searches fan out to every enabled source in parallel; a source that keeps failing is put in a short cooldown instead of slowing everything down; every download is validated (an HTML error page never gets saved as `.srt`) and falls back to the next-best candidate across sources, never retrying the same source more than twice.
-- ✏️ **Episode renaming** — match your files against [TVMaze](https://www.tvmaze.com) (always on, keyless) and optionally [TMDB](https://www.themoviedb.org) (free API key), preview `Show - S01E02 - Title.mkv` names, confirm, done. Results from both sources are merged; if the one you picked has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
+- 🎯 **One detection for everything** — each file's show is identified once, on [TVMaze](https://www.tvmaze.com) (always on, keyless) and optionally [TMDB](https://www.themoviedb.org) (free API key), and both the subtitle search and the rename feature use that same answer. When the name is ambiguous (two *Battlestar Galactica*s, a spin-off with the same name) the app asks you to pick from a short list instead of guessing; you can change the show or the season at any time by clicking a file's *Detected* cell.
+- ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
 - 🔄 **Auto-update** — the app updates itself from GitHub Releases.
 
@@ -43,7 +45,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
    - SubDL and SubSource have no built-in key on purpose: their quotas are per key, so a
      shared key would be exhausted across all installs.
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video.
-4. **Rename episodes** (pencil icon): search your show, check the proposed names, click *Rename*.
+4. **Rename episodes** (Rename tab): shows are detected for you — pick one where the app asks, fix a season if a guess is wrong, check the proposed names, click *Rename*.
 
 ## Development
 
@@ -84,7 +86,7 @@ only (see Releasing).
 
 | Layer | Where | What |
 |---|---|---|
-| Core | `src/Subtitall/Core` | Filename parser, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, settings |
+| Core | `src/Subtitall/Core` | Filename parser, episode/season guesser, show detection, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, settings |
 | API | `src/Subtitall/Api` | Minimal-API REST endpoints + Server-Sent Events for live progress |
 | UI | `src/Subtitall/wwwroot` | Simple tabbed interface — vanilla HTML/CSS/JS, zero frontend dependencies |
 | Shell | `Program.cs` + ElectronNET.Core | Electron window, native dialogs, auto-update |

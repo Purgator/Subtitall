@@ -20,9 +20,21 @@ public static partial class FilenameParser
     [GeneratedRegex(@"(?<![A-Za-z])Season[ ._\-]*(?<s>\d{1,2})[ ._\-]*(?:Episode|Ep)[ ._\-]*(?<e>\d{1,3})", RegexOptions.IgnoreCase)]
     private static partial Regex VerboseSeasonEpisodeRegex();
 
-    // "Show - 12", "Show - 12.5" (skip .5 specials), "Show - 12v2" — anime absolute numbering.
-    [GeneratedRegex(@"[ ._]-[ ._](?<e>\d{1,4})(?:v\d)?\s*(?:$|[\[\(])")]
+    // "Show - 12", "Show - 12v2", "Show - 12 BD 1080p" — anime absolute numbering (or a bare
+    // in-season number: the season is guessed later). "Show - 12.5" (specials) is skipped by
+    // the lookahead, and "Show - 1080p" too since the digits must end at a separator.
+    [GeneratedRegex(@"[ ._]-[ ._](?<e>\d{1,4})(?:v\d)?(?=$|[ ._\[\(])")]
     private static partial Regex AbsoluteEpisodeRegex();
+
+    // "Show E12", "Show Ep12", "Show Episode 12" — episode without a season.
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(?:E|Ep|Episode)[ ._]?(?<e>\d{1,3})(?![0-9A-Za-z])", RegexOptions.IgnoreCase)]
+    private static partial Regex EpisodeOnlyRegex();
+
+    // Season markers that live in the show title itself ("Attack on Titan The Final Season",
+    // "Shingeki no Kyojin Season 3", "My Hero Academia 2nd Season", "Show S2", "Show Part 2"
+    // is NOT a season). Matched at the end of the cleaned title.
+    [GeneratedRegex(@"\s+(?:(?<final>(?:the\s+)?final\s+season)|season\s*(?<n>\d{1,2})|(?<n>\d{1,2})(?:st|nd|rd|th)\s+season|s(?<n>\d{1,2}))(?:\s+part\s*\d{1,2})?$", RegexOptions.IgnoreCase)]
+    private static partial Regex TitleSeasonHintRegex();
 
     // x/p exclusions keep resolutions ("1920x1080", "2019p") from reading as years.
     [GeneratedRegex(@"(?<![\dxXpP])(?<y>(19|20)\d{2})(?![\dxXpP])")]
@@ -43,7 +55,7 @@ public static partial class FilenameParser
         "aac", "ac3", "eac3", "dts", "ddp", "dd5", "dd+", "truehd", "atmos", "flac", "opus", "mp3",
         // separator-split halves of "Blu-Ray", "WEB-DL", "H.264" (separators become spaces before matching)
         "blu", "dl", "264", "265",
-        "10bit", "8bit", "hdr", "hdr10", "dv", "dovi", "sdr",
+        "10bit", "8bit", "hi10", "hi10p", "hdr", "hdr10", "dv", "dovi", "sdr",
         "proper", "repack", "extended", "unrated", "remastered", "internal", "limited", "complete",
         "multi", "vostfr", "vf", "vo", "subbed", "dubbed", "dual",
     ];
@@ -102,6 +114,12 @@ public static partial class FilenameParser
             absoluteEpisode = int.Parse(m.Groups["e"].Value);
             titleEnd = m.Index;
         }
+        // A year next to "Episode N" is a movie ("Star Wars Episode 1 1999"), not a TV episode.
+        else if ((m = EpisodeOnlyRegex().Match(name)).Success && !YearRegex().IsMatch(name))
+        {
+            absoluteEpisode = int.Parse(m.Groups["e"].Value);
+            titleEnd = m.Index;
+        }
 
         // Year: last standalone year token wins ("1917.2019" → year 2019, title "1917").
         int? year = null;
@@ -121,6 +139,19 @@ public static partial class FilenameParser
         // If nothing matched, the "title" may still carry noise tokens — cut at the first one.
         title = CutAtNoise(title);
 
+        // "Show The Final Season - 15" / "Show Season 2 - 05": the season is part of the title.
+        int? seasonHint = null;
+        var finalSeasonHint = false;
+        var hint = TitleSeasonHintRegex().Match(title);
+        if (hint.Success)
+        {
+            if (hint.Groups["final"].Success)
+                finalSeasonHint = true;
+            else
+                seasonHint = int.Parse(hint.Groups["n"].Value);
+            title = title[..hint.Index].Trim();
+        }
+
         // Trailing "-GROUP" on scene releases. Only trust it when the name carries scene
         // markers — otherwise hyphenated titles lose their tail ("Spider-Man" → group "Man").
         var looksLikeSceneRelease = season.HasValue || absoluteEpisode.HasValue || year.HasValue || ContainsNoise(name);
@@ -138,6 +169,8 @@ public static partial class FilenameParser
             Episode = episode,
             EndEpisode = endEpisode,
             AbsoluteEpisode = absoluteEpisode,
+            SeasonHint = seasonHint,
+            FinalSeasonHint = finalSeasonHint,
             Year = year,
             ReleaseGroup = releaseGroup,
         };
@@ -152,7 +185,8 @@ public static partial class FilenameParser
     private static bool IsNoise(string token)
     {
         token = token.Trim().ToLowerInvariant().TrimEnd('.');
-        return NoiseTokens.Contains(token) || Regex.IsMatch(token, @"^(dd[p+]?[257]([ .]?[01])?|\d{3,4}p)$");
+        // "1080pp" is a typo seen in the wild on some anime releases.
+        return NoiseTokens.Contains(token) || Regex.IsMatch(token, @"^(dd[p+]?[257]([ .]?[01])?|\d{3,4}pp?)$");
     }
 
     private static string CutAtNoise(string title)

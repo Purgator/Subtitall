@@ -38,10 +38,7 @@ const state = {
   progress: { done: 0, total: 0 },
   langState: {},          // itemId -> { lang: "searching" | "failed:<msg>" }
   // rename view
-  showQuery: "",
-  showResults: [],
-  selectedShow: null,
-  proposals: null,
+  proposals: null,        // null = not loaded yet
   proposalChecks: {},     // itemId -> bool
   renameBusy: false,
 };
@@ -96,6 +93,7 @@ async function loadLibrary() {
 }
 
 const loadLibraryDebounced = debounce(() => loadLibrary().catch(console.error), 250);
+const loadProposalsDebounced = debounce(() => loadProposals().catch(console.error), 400);
 
 async function loadAll() {
   const [meta, settings, items] = await Promise.all([
@@ -128,6 +126,7 @@ function connectEvents() {
       case "settings-changed":
         if (type === "settings-changed") get("/api/settings").then((s) => { state.settings = s; render(); });
         loadLibraryDebounced();
+        if (state.view === "rename" && state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
         break;
       case "batch-started":
         state.searching = true;
@@ -326,22 +325,13 @@ function renderFileRowHtml(item) {
     return `<span class="lang-chip ${cls}" data-item="${item.id}" data-lang="${esc(lang)}" title="${esc(title)}">${esc(lang)}</span>`;
   }).join("");
 
-  const p = item.parsed || {};
-  let detected = esc(p.title || "");
-  if (p.season != null && p.episode != null) {
-    const ep = `S${String(p.season).padStart(2, "0")}E${String(p.episode).padStart(2, "0")}${p.endEpisode ? "-E" + String(p.endEpisode).padStart(2, "0") : ""}`;
-    detected += ` <span class="ep">${ep}</span>`;
-  } else if (p.absoluteEpisode != null) {
-    detected += ` <span class="ep">#${p.absoluteEpisode}</span>`;
-  } else if (p.year) {
-    detected += ` <span class="ep">(${p.year})</span>`;
-  }
-
+  const isEpisode = !!item.parsed?.isEpisode;
   return `
     <tr data-row="${item.id}">
       <td class="col-langs">${chips}</td>
       <td title="${esc(item.path)}">${esc(item.fileName)}</td>
-      <td class="col-parsed"><span class="parsed-tag">${detected}</span></td>
+      <td class="col-parsed ${isEpisode ? "det-cell" : ""}" ${isEpisode ? `data-detect="${item.id}" title="Click to change the show or season"` : ""}>
+        <span class="parsed-tag">${detectionHtml(item)}</span></td>
       <td class="col-size">${formatSize(item.sizeBytes)}</td>
       <td class="col-actions">
         <button class="icon-btn" data-reveal="${item.id}" title="Show in folder">&#128194;</button>
@@ -371,6 +361,9 @@ function bindFileRowActions(root) {
   });
   root.querySelectorAll(".lang-chip").forEach((chip) => {
     chip.onclick = () => openCandidatesModal(chip.dataset.item, chip.dataset.lang);
+  });
+  root.querySelectorAll("[data-detect]").forEach((cell) => {
+    cell.onclick = () => openDetectionModal(cell.dataset.detect);
   });
 }
 
@@ -456,30 +449,210 @@ async function openCandidatesModal(itemId, language) {
   });
 }
 
+// ---------- Detection (which show / which season) ----------------------------------------------
+
+function episodeTag(item) {
+  const p = item.parsed || {};
+  const e = item.effective || {};
+  if (e.season != null && e.episode != null) {
+    return `S${String(e.season).padStart(2, "0")}E${String(e.episode).padStart(2, "0")}${e.endEpisode ? "-E" + String(e.endEpisode).padStart(2, "0") : ""}`;
+  }
+  if (p.absoluteEpisode != null) return `#${p.absoluteEpisode}`;
+  if (p.year) return `(${p.year})`;
+  return "";
+}
+
+// What the Detected column says: the show as detected, the season/episode as guessed, and
+// whether something needs the user's attention.
+function detectionHtml(item) {
+  const p = item.parsed || {};
+  const d = item.detection;
+  const tag = episodeTag(item);
+  if (!p.isEpisode) return `${esc(p.title || "")} ${tag ? `<span class="ep">${esc(tag)}</span>` : ""}`;
+
+  let name = esc(p.title || "");
+  let extra = "";
+  if (!d) extra = `<span class="det-note"><span class="spin"></span> detecting…</span>`;
+  else if (d.status === "resolved") name = `<b>${esc(d.show.name)}</b>`;
+  else if (d.status === "ambiguous") extra = `<span class="det-warn">which show? click to choose</span>`;
+  else extra = `<span class="det-warn">show not found — click to pick</span>`;
+
+  let badge = "";
+  if (item.guess && item.guess.confidence !== "explicit")
+    badge = `<span class="guess-badge ${item.guess.confidence}" title="${esc(item.guess.reason)}">guessed</span>`;
+  else if (d && d.status === "resolved" && !item.guess && p.absoluteEpisode != null)
+    badge = `<span class="guess-badge low" title="Episode ${p.absoluteEpisode} doesn't fit any season — click to pick the season">no season</span>`;
+
+  return `${name} <span class="ep">${esc(tag)}</span> ${badge} ${extra}`;
+}
+
+function groupKeyOf(item) {
+  return (item.parsed?.title || "").trim().toLowerCase();
+}
+
+function itemsOfTitle(title) {
+  const key = title.trim().toLowerCase();
+  return state.items.filter((i) => i.parsed?.isEpisode && groupKeyOf(i) === key);
+}
+
+async function chooseShow(title, show) {
+  try {
+    await post("/api/library/show", { title, show });
+    await loadLibrary();
+  } catch (err) {
+    toast(`Could not set the show: ${err.message}`, "err");
+  }
+}
+
+async function setSeason(title, season) {
+  const itemIds = itemsOfTitle(title).map((i) => i.id);
+  try {
+    await post("/api/library/season", { itemIds, season: season || null });
+    await loadLibrary();
+  } catch (err) {
+    toast(`Could not set the season: ${err.message}`, "err");
+  }
+}
+
+function showResultHtml(show, selected) {
+  return `
+    <div class="show-result ${selected ? "selected" : ""}" data-show='${esc(JSON.stringify(show))}'>
+      ${show.imageUrl ? `<img src="${esc(show.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
+      <div class="meta">
+        <div class="name">${esc(show.name)}</div>
+        <div class="sub">${esc([show.premiered?.slice(0, 4), show.network, show.source].filter(Boolean).join(" · "))}</div>
+      </div>
+    </div>`;
+}
+
+function isSameShow(a, b) {
+  return !!a && !!b && a.id === b.id && a.source === b.source;
+}
+
+function seasonSelectHtml(group, current) {
+  const seasons = group[0]?.detection?.seasons?.length ? group[0].detection.seasons : Array.from({ length: 12 }, (_, i) => i + 1);
+  return `
+    <select class="input season-select" title="Season for files whose name carries only an episode number">
+      <option value="">Season: auto</option>
+      ${seasons.map((s) => `<option value="${s}" ${current === s ? "selected" : ""}>Season ${s}</option>`).join("")}
+    </select>`;
+}
+
+// Binds the show list + search box + season select inside `root` for one title group.
+function bindShowPicker(root, title, onChanged) {
+  root.querySelectorAll("[data-show]").forEach((el) => {
+    el.onclick = async () => {
+      await chooseShow(title, JSON.parse(el.dataset.show));
+      onChanged?.();
+    };
+  });
+  const select = root.querySelector(".season-select");
+  if (select) select.onchange = async () => { await setSeason(title, Number(select.value)); onChanged?.(); };
+
+  const input = root.querySelector(".show-search");
+  const results = root.querySelector(".show-search-results");
+  if (input && results) {
+    input.oninput = debounce(async () => {
+      const q = input.value.trim();
+      if (q.length < 2) { results.innerHTML = ""; return; }
+      let found = [];
+      try { found = await get(`/api/rename/shows?q=${encodeURIComponent(q)}`); } catch { /* ignore */ }
+      results.innerHTML = found.length
+        ? found.map((s) => showResultHtml(s, false)).join("")
+        : `<div class="hint-text" style="padding:6px 2px">No results.</div>`;
+      results.querySelectorAll("[data-show]").forEach((el) => {
+        el.onclick = async () => { await chooseShow(title, JSON.parse(el.dataset.show)); onChanged?.(); };
+      });
+    }, 400);
+  }
+}
+
+let detectionModalToken = 0;
+
+function openDetectionModal(itemId) {
+  const item = state.items.find((i) => i.id === itemId);
+  if (!item || !item.parsed?.isEpisode) return;
+  const title = item.parsed.title;
+  const token = ++detectionModalToken;
+  const root = document.getElementById("modal-root");
+  const close = () => { detectionModalToken++; root.innerHTML = ""; };
+
+  const draw = () => {
+    if (token !== detectionModalToken) return;
+    const group = itemsOfTitle(title);
+    const d = group[0]?.detection;
+    const current = d?.show || null;
+    const candidates = d?.candidates || [];
+    const override = group.find((i) => i.seasonOverride != null)?.seasonOverride ?? null;
+    root.innerHTML = `
+      <div class="modal-backdrop">
+        <div class="modal">
+          <div class="modal-head">
+            <span class="title">“${esc(title)}” — ${group.length} file${group.length === 1 ? "" : "s"}</span>
+            <button class="icon-btn" id="modal-close" title="Close">&#10005;</button>
+          </div>
+          <div class="modal-body detect-body">
+            <div class="detect-section">
+              <div class="detect-label">Show</div>
+              ${!d ? `<div class="hint-text"><span class="spin"></span> Detecting…</div>`
+                : d.status === "ambiguous" ? `<div class="warn-text" style="margin-bottom:6px">Several shows match — pick the right one:</div>`
+                : d.status === "notFound" ? `<div class="warn-text" style="margin-bottom:6px">No show matches this name. Pick one below or search for it.</div>`
+                : ""}
+              ${candidates.map((s) => showResultHtml(s, isSameShow(s, current))).join("")}
+              <input class="input show-search" placeholder="Search another show on TVMaze / TMDB…" style="margin-top:8px">
+              <div class="show-search-results"></div>
+            </div>
+            <div class="detect-section">
+              <div class="detect-label">Season</div>
+              <div class="hint-text" style="margin-bottom:6px">For files whose name carries only an episode number (e.g. “- 15”). Files that spell out their season keep it.</div>
+              ${seasonSelectHtml(group, override)}
+            </div>
+            <div class="detect-section">
+              <div class="detect-label">Files</div>
+              ${group.map((i) => `<div class="detect-file"><span class="ep">${esc(episodeTag(i))}</span> ${esc(i.fileName)}${i.guess && i.guess.confidence !== "explicit" ? ` <span class="hint-text">— ${esc(i.guess.reason)}</span>` : ""}</div>`).join("")}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    root.querySelector("#modal-close").onclick = close;
+    root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
+    bindShowPicker(root, title, draw);
+  };
+  draw();
+}
+
 // ---------- Rename view -------------------------------------------------------------------------
 
-// Guards against out-of-order proposal responses when switching shows quickly.
-let selectShowToken = 0;
+// Guards against out-of-order proposal responses.
+let proposalsToken = 0;
 
-async function selectShow(show) {
-  if (!show) return;
-  const token = ++selectShowToken;
-  state.selectedShow = show;
-  state.proposals = null;
-  render();
+async function loadProposals() {
+  const token = ++proposalsToken;
   try {
-    const proposals = await post("/api/rename/proposals", { showId: show.id, showName: show.name, source: show.source });
-    if (token !== selectShowToken) return; // a newer selection superseded this one
+    const proposals = await post("/api/rename/proposals", {});
+    if (token !== proposalsToken) return;
     state.proposals = proposals;
-    state.proposalChecks = {};
     for (const proposal of proposals)
-      state.proposalChecks[proposal.itemId] = proposal.canApply;
+      if (!(proposal.itemId in state.proposalChecks)) state.proposalChecks[proposal.itemId] = proposal.canApply;
   } catch (err) {
-    if (token !== selectShowToken) return;
+    if (token !== proposalsToken) return;
     state.proposals = [];
-    toast(`Could not load episodes: ${err.message}`, "err");
+    toast(`Could not build the proposals: ${err.message}`, "err");
   }
-  render();
+  if (state.view === "rename") render();
+}
+
+function renameGroups() {
+  const groups = new Map();
+  for (const item of state.items) {
+    const d = item.detection;
+    const key = !item.parsed?.isEpisode ? "movies"
+      : d?.show ? `show:${d.show.source}:${d.show.id}`
+      : `title:${groupKeyOf(item)}`;
+    if (!groups.has(key)) groups.set(key, { key, items: [] });
+    groups.get(key).items.push(item);
+  }
+  return [...groups.values()].sort((a, b) => (a.key === "movies") - (b.key === "movies"));
 }
 
 function renderRenameView(main) {
@@ -487,109 +660,54 @@ function renderRenameView(main) {
     main.innerHTML = `<div class="dropzone"><div class="title">Nothing to rename yet</div><div>Add some episodes in the Files tab first.</div></div>`;
     return;
   }
-
-  main.innerHTML = `
-    <div class="rename-grid">
-      <div class="card">
-        <div class="panel-title">1 · Find the show</div>
-        <div class="panel-body">
-          <input class="input" id="show-search" placeholder="Search on TVMaze / TMDB…" value="${esc(state.showQuery)}">
-          <div id="show-results" style="margin-top:8px"></div>
-        </div>
-      </div>
-      <div class="card" id="rename-right"></div>
-    </div>`;
-
-  const input = main.querySelector("#show-search");
-  input.oninput = debounce(async () => {
-    state.showQuery = input.value.trim();
-    if (state.showQuery.length < 2) { state.showResults = []; renderShowResults(); return; }
-    try {
-      state.showResults = await get(`/api/rename/shows?q=${encodeURIComponent(state.showQuery)}`);
-    } catch { state.showResults = []; }
-    renderShowResults();
-  }, 400);
-
-  renderShowResults();
-  renderRenamePanel();
-}
-
-function renderShowResults() {
-  const root = document.getElementById("show-results");
-  if (!root) return;
-  if (!state.showResults.length) {
-    root.innerHTML = `<div class="hint-text" style="padding:6px 2px">${state.showQuery.length >= 2 ? "No results." : "Type the show's name, then pick it from the results."}</div>`;
-    return;
-  }
-  root.innerHTML = state.showResults.map((show, index) => `
-    <div class="show-result ${state.selectedShow?.id === show.id && state.selectedShow?.source === show.source ? "selected" : ""}" data-index="${index}">
-      ${show.imageUrl ? `<img src="${esc(show.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
-      <div class="meta">
-        <div class="name">${esc(show.name)}</div>
-        <div class="sub">${esc([show.premiered?.slice(0, 4), show.network, show.source].filter(Boolean).join(" · "))}</div>
-      </div>
-    </div>`).join("");
-  root.querySelectorAll(".show-result").forEach((el) => {
-    el.onclick = () => selectShow(state.showResults[Number(el.dataset.index)]);
-  });
-}
-
-function renderRenamePanel() {
-  const panel = document.getElementById("rename-right");
-  if (!panel) return;
-
-  if (!state.selectedShow) {
-    panel.innerHTML = `
-      <div class="panel-title">2 · Review &amp; rename</div>
-      <div class="panel-empty">Pick a show on the left to preview the new names.</div>`;
-    return;
-  }
   if (state.proposals === null) {
-    panel.innerHTML = `
-      <div class="panel-title">2 · Review &amp; rename</div>
-      <div class="panel-empty"><span class="spin"></span> Loading episodes from TVMaze…</div>`;
+    main.innerHTML = `<div class="panel-empty"><span class="spin"></span> Detecting shows and matching episodes…</div>`;
+    loadProposals();
     return;
   }
 
-  const selectedCount = state.proposals.filter((p) => state.proposalChecks[p.itemId] && p.canApply).length;
-  panel.innerHTML = `
-    <div class="panel-title" style="display:flex;align-items:center;gap:10px">
-      <span style="flex:1">2 · ${esc(state.selectedShow.name)}</span>
-      <button class="btn small" id="apply-renames" ${selectedCount && !state.renameBusy ? "" : "disabled"}>
-        ${state.renameBusy ? "Renaming…" : `Rename ${selectedCount} file${selectedCount === 1 ? "" : "s"}`}
+  const byItem = Object.fromEntries(state.proposals.map((p) => [p.itemId, p]));
+  const applicable = state.proposals.filter((p) => state.proposalChecks[p.itemId] && p.canApply);
+  main.innerHTML = `
+    <div class="actionbar">
+      <span class="hint-text">Shows are detected from the filenames — the same way the subtitle search sees them. Pick a show or a season where the guess is wrong.</span>
+      <div class="grow"></div>
+      <button class="btn secondary" id="redetect" ${state.renameBusy ? "disabled" : ""}>Detect again</button>
+      <button class="btn" id="apply-renames" ${applicable.length && !state.renameBusy ? "" : "disabled"}>
+        ${state.renameBusy ? "Renaming…" : `Rename ${applicable.length} file${applicable.length === 1 ? "" : "s"}`}
       </button>
     </div>
-    <table class="rename-table">
-      <thead><tr><th class="col-check"></th><th>Current name</th><th class="arrow"></th><th>New name</th></tr></thead>
-      <tbody>
-        ${state.proposals.map((p) => `
-          <tr class="${p.problem ? "problem" : ""}">
-            <td class="col-check"><input type="checkbox" data-check="${esc(p.itemId)}"
-              ${state.proposalChecks[p.itemId] && p.canApply ? "checked" : ""} ${p.canApply ? "" : "disabled"}></td>
-            <td title="${esc(p.oldName)}">${esc(p.oldName)}</td>
-            <td class="arrow">&#8594;</td>
-            <td class="new-name" title="${esc(p.problem || p.newName)}">
-              ${p.problem ? `<span class="rename-problem">${esc(p.problem)}</span>` : esc(p.newName)}
-            </td>
-          </tr>`).join("")}
-      </tbody>
-    </table>`;
+    ${renameGroups().map((group) => renderRenameGroupHtml(group, byItem)).join("")}`;
 
-  panel.querySelectorAll("[data-check]").forEach((box) => {
+  main.querySelectorAll(".rename-group").forEach((card) => {
+    const title = card.dataset.title;
+    if (title) bindShowPicker(card, title, () => loadProposals());
+    card.querySelectorAll("[data-change]").forEach((btn) => { btn.onclick = () => openDetectionModal(btn.dataset.change); });
+  });
+
+  main.querySelectorAll("[data-check]").forEach((box) => {
     box.onchange = () => {
       state.proposalChecks[box.dataset.check] = box.checked;
       const count = state.proposals.filter((p) => state.proposalChecks[p.itemId] && p.canApply).length;
-      const btn = panel.querySelector("#apply-renames");
+      const btn = main.querySelector("#apply-renames");
       btn.disabled = count === 0 || state.renameBusy;
       btn.textContent = `Rename ${count} file${count === 1 ? "" : "s"}`;
     };
   });
 
-  panel.querySelector("#apply-renames").onclick = async () => {
+  main.querySelector("#redetect").onclick = async () => {
+    state.renameBusy = true;
+    render();
+    try { await post("/api/library/detect"); await loadLibrary(); }
+    catch (err) { toast(err.message, "err"); }
+    finally { state.renameBusy = false; await loadProposals(); }
+  };
+
+  main.querySelector("#apply-renames").onclick = async () => {
     const chosen = state.proposals.filter((p) => state.proposalChecks[p.itemId] && p.canApply);
     if (!chosen.length) return;
     state.renameBusy = true;
-    renderRenamePanel();
+    render();
     try {
       const outcomes = await post("/api/rename/apply", { proposals: chosen });
       const ok = outcomes.filter((o) => o.renamed).length;
@@ -599,14 +717,79 @@ function renderRenamePanel() {
         failed.length ? "err" : "ok", 6000);
       if (warned) toast(warned.error, "info", 8000);
       await loadLibrary();
-      await selectShow(state.selectedShow); // refresh proposals with new names
     } catch (err) {
       toast(err.message, "err");
     } finally {
       state.renameBusy = false;
-      render();
+      await loadProposals();
     }
   };
+}
+
+function renderRenameGroupHtml(group, byItem) {
+  const first = group.items[0];
+  const d = first.detection;
+  const title = first.parsed?.title || "";
+  const override = group.items.find((i) => i.seasonOverride != null)?.seasonOverride ?? null;
+
+  let head;
+  if (group.key === "movies") {
+    head = `<div class="panel-title">Not TV episodes</div>
+      <div class="hint-text" style="padding:0 14px 10px">Movies and files without an episode number are left alone.</div>`;
+  } else if (!d) {
+    head = `<div class="panel-title">“${esc(title)}”</div>
+      <div class="hint-text" style="padding:0 14px 10px"><span class="spin"></span> Detecting the show…</div>`;
+  } else if (d.status === "resolved") {
+    const s = d.show;
+    head = `
+      <div class="group-head">
+        ${s.imageUrl ? `<img src="${esc(s.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
+        <div class="meta">
+          <div class="name">${esc(s.name)}</div>
+          <div class="sub">${esc([s.premiered?.slice(0, 4), s.network, s.source, d.chosenByUser ? "chosen by you" : `detected from “${title}”`].filter(Boolean).join(" · "))}</div>
+        </div>
+        ${seasonSelectHtml(group.items, override)}
+        <button class="btn small secondary" data-change="${esc(first.id)}">Change show…</button>
+      </div>`;
+  } else {
+    const why = d.status === "ambiguous"
+      ? `Several shows match “${esc(title)}” — which one is it?`
+      : `No show found for “${esc(title)}” — pick one or search for it:`;
+    head = `
+      <div class="group-head wrap">
+        <div class="warn-text" style="flex-basis:100%">${why}</div>
+        <div class="show-candidates">${d.candidates.map((s) => showResultHtml(s, false)).join("")}</div>
+        <div style="flex-basis:100%">
+          <input class="input show-search" placeholder="Search on TVMaze / TMDB…" style="max-width:360px">
+          <div class="show-search-results"></div>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="card rename-group" data-title="${group.key === "movies" ? "" : esc(title)}">
+      ${head}
+      <table class="rename-table">
+        <thead><tr><th class="col-check"></th><th>Current name</th><th class="arrow"></th><th>New name</th></tr></thead>
+        <tbody>
+          ${group.items.map((item) => {
+            const p = byItem[item.id];
+            if (!p) return "";
+            return `
+              <tr class="${p.problem ? "problem" : ""}">
+                <td class="col-check"><input type="checkbox" data-check="${esc(p.itemId)}"
+                  ${state.proposalChecks[p.itemId] && p.canApply ? "checked" : ""} ${p.canApply ? "" : "disabled"}></td>
+                <td title="${esc(p.oldName)}">${esc(p.oldName)}</td>
+                <td class="arrow">&#8594;</td>
+                <td class="new-name" title="${esc(p.problem || p.note || p.newName)}">
+                  ${p.problem ? `<span class="rename-problem">${esc(p.problem)}</span>` : esc(p.newName)}
+                  ${p.note ? `<span class="guess-badge ${item.guess?.confidence === "low" ? "low" : ""}" title="${esc(p.note)}">guessed</span>` : ""}
+                </td>
+              </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 // ---------- Settings view --------------------------------------------------------------------------

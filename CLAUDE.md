@@ -52,7 +52,10 @@ Packaging facts (verified 2026-10; do not "fix" these):
 ## Architecture map
 
 - `src/Subtitall/Core/` — pure logic, no HTTP endpoints:
-  - `FilenameParser` (scene/anime name parsing), `LibraryService` (linked videos),
+  - `FilenameParser` (scene/anime name parsing, season hints in titles), `EpisodeGuesser`
+    (season for files that only carry an episode number — pure, group-aware),
+    `ShowDetectionService` (filename title → show, with aliases + episode list; asks via
+    `Ambiguous` when several match; remembers user picks), `LibraryService` (linked videos),
     `SettingsService` (%APPDATA%/Subtitall/settings.json), `SubtitleNaming` (`video.<lang>.srt`),
     `MovieHash` (OpenSubtitles 64 KiB head+tail hash), `TextMatch` (token similarity),
     `TvMazeService` + `TmdbService` + `ShowMetadataService` (merged metadata sources),
@@ -62,7 +65,9 @@ Packaging facts (verified 2026-10; do not "fix" these):
     `OpenSubtitlesProvider` (Api-Key + optional user JWT), `SubDlProvider` (key, zip payloads),
     `SubSourceProvider` (key, X-API-Key header, zip payloads).
 - `src/Subtitall/Api/` — minimal-API endpoints (`Endpoints.cs`), `EventBus` (SSE broadcast),
-  `BatchSearchService` (one batch search at a time, progress events).
+  `BatchSearchService` (one batch search at a time, progress events), `MediaDetectionService`
+  (runs show detection + season guessing per title group after files are added, and before any
+  search or rename; sets `MediaItem.Detection`/`Guess`; providers read `MediaItem.Effective`).
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
   layout (Files / Rename / Settings). Keep it simple and intuitive; do NOT style it after an IDE
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).
@@ -96,9 +101,13 @@ Packaging facts (verified 2026-10; do not "fix" these):
   alternate titles (romaji anime names, translations); TVMaze search itself matches akas
   ("Shingeki no Kyojin" finds Attack on Titan) but NOT acronyms ("SnK" finds nothing useful) —
   acronym matching is ours (`TextMatch.MatchesShowName`).
-- **Anime aliasing**: `ShowAliasResolver` (TVMaze-backed, cached) fills `MediaItem.AlternateTitles`
-  during subtitle search; Gestdown retries its show lookup with those names since Addic7ed only
-  knows English titles. Rename proposals match files against the show name + akas + acronyms.
+- **Anime aliasing**: `MediaItem.AlternateTitles` comes from the detected show (name + akas);
+  Gestdown and SubSource retry their show lookup with those names since they mostly index
+  English titles. Rename proposals match files against the show name + akas + acronyms.
+- **Show detection and season guessing are shared**: the Rename tab and the subtitle search must
+  never detect a show two different ways — both go through `ShowDetectionService` +
+  `EpisodeGuesser` (via `MediaDetectionService`). When in doubt, ask the user (candidate list),
+  don't pick silently; a user's show pick or season override always wins.
 
 ## Testing conventions
 

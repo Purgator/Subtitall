@@ -9,7 +9,6 @@ public sealed record SearchOutcome(
 public sealed class SubtitleSearchService(
     IEnumerable<ISubtitleProvider> providers,
     SettingsService settings,
-    ShowAliasResolver aliases,
     ProviderHealth health,
     ILogger<SubtitleSearchService> logger)
 {
@@ -24,11 +23,8 @@ public sealed class SubtitleSearchService(
             logger.LogInformation("{Provider} is cooling down after repeated failures — skipped", provider.Name);
         active = active.Except(skipped).ToList();
 
-        // TV shows are often named differently across providers (romaji vs English anime
-        // titles) — resolve the other known names once so providers can fall back to them.
-        if (item.Parsed.IsEpisode && item.AlternateTitles is null)
-            item.AlternateTitles = (await aliases.GetAlternateNamesAsync(item.Parsed.Title, ct)).ToList();
-
+        // Show detection (name, aliases, season guess) has already run for the item — see
+        // MediaDetectionService; providers read item.Effective and item.AlternateTitles.
         var tasks = active.Select(async provider =>
         {
             try

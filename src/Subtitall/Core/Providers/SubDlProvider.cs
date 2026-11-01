@@ -34,14 +34,14 @@ public sealed class SubDlProvider(IHttpClientFactory httpFactory) : ISubtitlePro
             ("file_name", Path.GetFileNameWithoutExtension(item.FileName)), ct);
         if (byFile.Count > 0)
             return byFile;
-        return await QueryAsync(item, language, settings, ("film_name", item.Parsed.Title), ct);
+        return await QueryAsync(item, language, settings, ("film_name", item.Effective.Title), ct);
     }
 
     private async Task<IReadOnlyList<SubtitleCandidate>> QueryAsync(
         MediaItem item, string language, AppSettings settings,
         (string Key, string Value) nameParam, CancellationToken ct)
     {
-        var parsed = item.Parsed;
+        var parsed = item.Effective;
         var subdlLang = Languages.ToSubDl(language);
         var url = $"{ApiUrl}?api_key={Uri.EscapeDataString(settings.SubDl.ApiKey.Trim())}" +
                   $"&{nameParam.Key}={Uri.EscapeDataString(nameParam.Value)}" +

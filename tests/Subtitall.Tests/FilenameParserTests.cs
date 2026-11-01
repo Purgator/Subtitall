@@ -62,6 +62,10 @@ public class FilenameParserTests
     [InlineData("[SubsPlease] Frieren - 28 (1080p) [ABC12345].mkv", "Frieren", 28, "SubsPlease")]
     [InlineData("[Erai-raws] One Piece - 1071 [720p].mkv", "One Piece", 1071, "Erai-raws")]
     [InlineData("Attack on Titan - 87.mkv", "Attack on Titan", 87, null)]
+    // Bare number followed by noise instead of a bracket.
+    [InlineData("[AnimeOut] Attack on Titan The Final Season - 16 BD 1080pp Hi10 FLAC [2636E656][1080pp][SCY][RapidBot].mkv", "Attack on Titan", 16, "AnimeOut")]
+    [InlineData("Show.Name.E07.720p.mkv", "Show Name", 7, null)]
+    [InlineData("Show Name Episode 7.mkv", "Show Name", 7, null)]
     public void Parses_anime_absolute_numbering(string file, string title, int abs, string? group)
     {
         var parsed = FilenameParser.Parse(file);
@@ -84,6 +88,42 @@ public class FilenameParserTests
         Assert.Equal(title, parsed.Title);
         Assert.Equal(year, parsed.Year);
         Assert.False(parsed.IsEpisode);
+    }
+
+    [Theory]
+    [InlineData("[AnimeOut] Attack on Titan The Final Season - 15 BD 1080pp Hi10 FLAC [7E56EAB4][1080pp][SCY][RapidBot].mkv", "Attack on Titan", null, true, 15)]
+    [InlineData("Shingeki no Kyojin Season 3 - 05 [1080p].mkv", "Shingeki no Kyojin", 3, false, 5)]
+    [InlineData("My Hero Academia 2nd Season - 07.mkv", "My Hero Academia", 2, false, 7)]
+    [InlineData("Attack on Titan The Final Season Part 2 - 03.mkv", "Attack on Titan", null, true, 3)]
+    [InlineData("Attack on Titan S4 - 03.mkv", "Attack on Titan", 4, false, 3)]
+    public void Season_hints_in_the_title_are_split_off(string file, string title, int? hint, bool final, int episode)
+    {
+        var parsed = FilenameParser.Parse(file);
+        Assert.Equal(title, parsed.Title);
+        Assert.Equal(hint, parsed.SeasonHint);
+        Assert.Equal(final, parsed.FinalSeasonHint);
+        Assert.Equal(episode, parsed.AbsoluteEpisode);
+        Assert.Null(parsed.Season);
+        Assert.True(parsed.IsEpisode);
+    }
+
+    [Fact]
+    public void Explicit_season_episode_with_v2_marker_and_episode_title()
+    {
+        var parsed = FilenameParser.Parse("[AnimeOut] Attack on Titan - S04E29 v4 - The Final Chapters Part 1 WEB 1080pp HEVC EAC3 AAC [8A69093D][1080pp][Baws][RapidBot].mkv");
+        Assert.Equal("Attack on Titan", parsed.Title);
+        Assert.Equal(4, parsed.Season);
+        Assert.Equal(29, parsed.Episode);
+        Assert.Null(parsed.EndEpisode);
+        Assert.Equal("AnimeOut", parsed.ReleaseGroup);
+    }
+
+    [Fact]
+    public void Episode_marker_next_to_a_year_is_a_movie()
+    {
+        var parsed = FilenameParser.Parse("Star.Wars.Episode.1.The.Phantom.Menace.1999.1080p.mkv");
+        Assert.False(parsed.IsEpisode);
+        Assert.Equal(1999, parsed.Year);
     }
 
     [Fact]

@@ -28,7 +28,7 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
     public async Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(
         MediaItem item, string language, AppSettings settings, CancellationToken ct)
     {
-        var parsed = item.Parsed;
+        var parsed = item.Effective;
         if (parsed.Season is not { } season || parsed.Episode is not { } episode)
             return []; // TV shows only, and absolute anime numbering can't be queried here.
 
