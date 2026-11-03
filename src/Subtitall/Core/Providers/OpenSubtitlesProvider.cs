@@ -150,7 +150,7 @@ public sealed class OpenSubtitlesProvider(
         if (withToken && await GetTokenAsync(settings, ct) is { } token)
             request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
         if (jsonBody is not null)
-            request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            request.Content = JsonContent(jsonBody);
 
         var http = httpFactory.CreateClient();
         using var response = await http.SendAsync(request, ct);
@@ -179,10 +179,16 @@ public sealed class OpenSubtitlesProvider(
     }
 
     /// <summary>Logs in with the current credentials (even if a token is cached) and reports the outcome.</summary>
+    /// <summary>OpenSubtitles accounts log in with a username; the e-mail address is rejected with a 400.</summary>
+    public static bool LooksLikeEmail(string username) => username.Trim().Contains('@');
+
     public async Task<OpenSubtitlesLogin> TestLoginAsync(AppSettings settings, CancellationToken ct)
     {
         if (!HasCredentials(settings))
             return new OpenSubtitlesLogin(false, null, null, "No username/password entered — downloads use the anonymous quota", DateTimeOffset.UtcNow);
+        if (LooksLikeEmail(settings.OpenSubtitles.Username))
+            return LastLogin = new OpenSubtitlesLogin(false, null, null,
+                "Use your OpenSubtitles username, not your e-mail address (the API rejects e-mails)", DateTimeOffset.UtcNow);
         InvalidateToken();
         try
         {
@@ -216,19 +222,20 @@ public sealed class OpenSubtitlesProvider(
                 return _token;
 
             await _gate.WaitAsync(ct);
+            // Exactly what the docs' sample sends: Accept + a bare "application/json" Content-Type.
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/login");
             request.Headers.TryAddWithoutValidation("Api-Key", ResolvedKey(settings));
             request.Headers.TryAddWithoutValidation("User-Agent", UserAgent.Value);
-            request.Content = new StringContent(
-                JsonSerializer.Serialize(new { username = config.Username.Trim(), password = config.Password }),
-                Encoding.UTF8, "application/json");
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            request.Content = JsonContent(
+                JsonSerializer.Serialize(new { username = config.Username.Trim(), password = config.Password }));
 
             var http = httpFactory.CreateClient();
             using var response = await http.SendAsync(request, ct);
             var content = await response.Content.ReadAsStringAsync(ct);
             if (!response.IsSuccessStatusCode)
             {
-                var error = $"Login failed ({(int)response.StatusCode}) — check username/password";
+                var error = LoginErrorMessage(response.StatusCode, content, config.Username);
                 LastLogin = new OpenSubtitlesLogin(false, null, null, error, DateTimeOffset.UtcNow);
                 throw new InvalidOperationException("OpenSubtitles " + error);
             }
@@ -253,6 +260,47 @@ public sealed class OpenSubtitlesProvider(
         {
             _loginLock.Release();
         }
+    }
+
+    /// <summary>JSON body with a bare "application/json" Content-Type (no charset suffix).</summary>
+    private static StringContent JsonContent(string json)
+    {
+        var content = new StringContent(json, Encoding.UTF8);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        return content;
+    }
+
+    /// <summary>
+    /// The API's own message explains most login failures (e-mail used as username, wrong
+    /// password, bad key); pass it on instead of a generic "check username/password".
+    /// </summary>
+    internal static string LoginErrorMessage(System.Net.HttpStatusCode status, string body, string username)
+    {
+        var detail = ApiMessage(body);
+        if (detail.Contains("not your email", StringComparison.OrdinalIgnoreCase) || LooksLikeEmail(username))
+            return "Login failed: use your OpenSubtitles username, not your e-mail address";
+        return status switch
+        {
+            System.Net.HttpStatusCode.Unauthorized => $"Login failed: {Or(detail, "wrong username or password")}",
+            System.Net.HttpStatusCode.Forbidden => $"Login failed: {Or(detail, "the API key was rejected")}",
+            System.Net.HttpStatusCode.TooManyRequests => "Login failed: too many login attempts — wait a few minutes",
+            _ => $"Login failed ({(int)status}): {Or(detail, "check username/password")}",
+        };
+
+        static string Or(string value, string fallback) => value.Length > 0 ? value : fallback;
+    }
+
+    private static string ApiMessage(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                return message.GetString()?.Trim() ?? "";
+        }
+        catch (JsonException) { }
+        return "";
     }
 
     private static DateTimeOffset? ParseResetTime(string? utc) =>

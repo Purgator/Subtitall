@@ -39,7 +39,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 2. *(Optional)* Open **Settings** to pick your languages and add provider API keys — changes save themselves. *Test login* under OpenSubtitles checks your account.
    Official builds ship **built-in keys for OpenSubtitles and TMDB**, so those work out of the
    box; a key you enter yourself always takes precedence.
-   - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota (the built-in key alone is capped at ~5 downloads/day per IP).
+   - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota (the built-in key alone is capped at ~5 downloads/day per IP). Use your OpenSubtitles **username**, not your e-mail address — the API rejects e-mails.
    - SubDL: grab a free key from your [SubDL panel](https://subdl.com/panel/api).
    - SubSource: create a free key from your [SubSource profile](https://subsource.net/profile) (API tab).
    - TMDB (for renaming): create a free key in your [TMDB API settings](https://www.themoviedb.org/settings/api) — the v3 key and the v4 read-access token both work.

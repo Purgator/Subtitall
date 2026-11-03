@@ -149,3 +149,33 @@ public class SearchReportTests
         }
     }
 }
+
+public class OpenSubtitlesLoginMessageTests
+{
+    [Fact]
+    public void Email_as_username_is_explained_whatever_the_api_says()
+    {
+        var message = OpenSubtitlesProvider.LoginErrorMessage(
+            System.Net.HttpStatusCode.BadRequest,
+            """{"message":"invalid username/password - remember to use your username and not your email to authenticate","status":400}""",
+            "someone");
+        Assert.Contains("not your e-mail", message);
+
+        message = OpenSubtitlesProvider.LoginErrorMessage(System.Net.HttpStatusCode.BadRequest, "", "someone@example.com");
+        Assert.Contains("not your e-mail", message);
+        Assert.True(OpenSubtitlesProvider.LooksLikeEmail("someone@example.com"));
+        Assert.False(OpenSubtitlesProvider.LooksLikeEmail("someone"));
+    }
+
+    [Fact]
+    public void Api_message_is_passed_on_and_statuses_get_plain_fallbacks()
+    {
+        Assert.Equal("Login failed: wrong username or password",
+            OpenSubtitlesProvider.LoginErrorMessage(System.Net.HttpStatusCode.Unauthorized, "not json", "u"));
+        Assert.Equal("Login failed: Unauthorized: bad key",
+            OpenSubtitlesProvider.LoginErrorMessage(System.Net.HttpStatusCode.Forbidden, """{"message":"Unauthorized: bad key"}""", "u"));
+        Assert.Contains("too many", OpenSubtitlesProvider.LoginErrorMessage(System.Net.HttpStatusCode.TooManyRequests, "", "u"));
+        Assert.Equal("Login failed (400): check username/password",
+            OpenSubtitlesProvider.LoginErrorMessage(System.Net.HttpStatusCode.BadRequest, "{}", "u"));
+    }
+}
