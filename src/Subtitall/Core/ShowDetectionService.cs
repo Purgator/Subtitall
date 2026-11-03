@@ -38,6 +38,7 @@ public sealed class ShowDetectionService(ShowMetadataService metadata, ILogger<S
     private readonly ConcurrentDictionary<string, ShowDetection> _byTitle = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TvShow> _choices = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Task<ResolvedShow>> _details = new();
+    private readonly ConcurrentDictionary<string, ShowInfo> _info = new();
 
     public async Task<ShowDetection> DetectAsync(string title, int? year, CancellationToken ct)
     {
@@ -88,6 +89,17 @@ public sealed class ShowDetectionService(ShowMetadataService metadata, ILogger<S
             _details.TryRemove(key, out _); // Let a later call retry after a failure.
             throw;
         }
+    }
+
+    /// <summary>Summary, genres, trailer… of a show, fetched once per show (misses are not cached).</summary>
+    public async Task<ShowInfo?> GetInfoAsync(TvShow show, CancellationToken ct)
+    {
+        if (_info.TryGetValue(Key(show), out var cached))
+            return cached;
+        var info = await metadata.GetInfoAsync(show.Source, show.Id, show.Name, ct);
+        if (info is not null)
+            _info[Key(show)] = info;
+        return info;
     }
 
     private async Task<ResolvedShow> LoadDetailsAsync(TvShow show, CancellationToken ct)

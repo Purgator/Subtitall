@@ -59,7 +59,8 @@ Packaging facts (verified 2026-10; do not "fix" these):
     `SettingsService` (%APPDATA%/Subtitall/settings.json), `SubtitleNaming` (`video.<lang>.srt`),
     `MovieHash` (OpenSubtitles 64 KiB head+tail hash), `TextMatch` (token similarity),
     `TvMazeService` + `TmdbService` + `ShowMetadataService` (merged metadata sources),
-    `RenameService`, `SubtitleSearchService` (fan-out + ranking), `ProviderHealth`
+    `RenameService`, `EpisodeCoverage` + `ShowInfo` (which episodes the linked files cover,
+    show metadata/trailer; `GET /api/shows`), `SubtitleSearchService` (fan-out + ranking), `ProviderHealth`
     (circuit breaker + success-rate ranking input), `SubtitleValidator` (payload sanity check).
   - `Core/Providers/` — `ISubtitleProvider` implementations: `GestdownProvider` (keyless, TV),
     `OpenSubtitlesProvider` (Api-Key + optional user JWT), `SubDlProvider` (key, zip payloads),
@@ -76,7 +77,7 @@ Packaging facts (verified 2026-10; do not "fix" these):
   a used-up download quota is a `QuotaExceededException` (tracked in `ProviderHealth`, never a
   circuit-breaker failure — searching still works). Enums serialize as camelCase strings.
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
-  layout (Files / Rename / Settings). Keep it simple and intuitive; do NOT style it after an IDE
+  layout (Files / Rename / Shows / Settings). Keep it simple and intuitive; do NOT style it after an IDE
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).
 - `Program.cs` — DI wiring, Electron window, auto-update check.
 
@@ -100,8 +101,9 @@ Packaging facts (verified 2026-10; do not "fix" these):
   Ids arrive as JSON numbers *or* strings (`FlexibleStringConverter`).
 - **TMDB**: v3 key as `api_key` query param, v4 token (starts `eyJ`) as Bearer header — both
   accepted in one settings field. Episodes come one season at a time (`/tv/{id}/season/{n}`);
-  `/tv/{id}/alternative_titles` wraps TV titles in `results` (movies use `titles`). Metadata
-  only — TMDB has no subtitles. Used as an optional second rename source behind keyless TVMaze
+  `/tv/{id}/alternative_titles` wraps TV titles in `results` (movies use `titles`);
+  `/tv/{id}/videos` lists YouTube trailers (`site`, `key`, `type`, `official`) — TVMaze has
+  none, so the Shows tab's trailer always comes from TMDB. Metadata only — TMDB has no subtitles. Used as an optional second rename source behind keyless TVMaze
   (`ShowMetadataService` merges by normalized name + premiere year).
 - **TVMaze**: keyless; specials have `number: null` and are NOT season 0; `search/shows` wraps
   results in `{score, show}`; almost every field is nullable. `GET /shows/:id/akas` lists

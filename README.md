@@ -23,6 +23,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 - 🔍 **No silent failures** — the Files tab says which sources a search uses, and every chip explains what each source did: found, nothing, can't search this kind of file, search error, download failed, cooling down, or *daily download quota used up* (with the reset time). A used-up quota is reported as such instead of looking like "nothing found", and the search keeps going on the other sources. OpenSubtitles account users see whether their login works and how many downloads are left today.
 - 🎯 **One detection for everything** — each file's show is identified once, on [TVMaze](https://www.tvmaze.com) (always on, keyless) and optionally [TMDB](https://www.themoviedb.org) (free API key), and both the subtitle search and the rename feature use that same answer. When the name is ambiguous (two *Battlestar Galactica*s, a spin-off with the same name) the app asks you to pick from a short list instead of guessing; you can change the show or the season at any time by clicking a file's *Detected* cell.
 - ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
+- 📺 **Shows tab** — every show your files were matched to, with its poster, summary, genres, status, network, rating, official site and trailer (trailers come from TMDB), the full episode list in viewing order with the file that covers each episode, and **what's missing**: aired episodes you have no file for, season by season (episodes that haven't aired yet are listed separately, with the next air date).
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
 - 🔄 **Auto-update** — the app updates itself from GitHub Releases, showing the download in the top bar; *Settings → Updates* has a *Check for updates* button and a *Restart to update* button once the update is ready.
 
@@ -47,6 +48,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
      shared key would be exhausted across all installs.
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video; red chips = nothing saved — hover or click the chip to see what each source said.
 4. **Rename episodes** (Rename tab): shows are detected for you — pick one where the app asks, fix a season if a guess is wrong, check the proposed names, click *Rename*.
+5. **See what's missing** (Shows tab): pick a show to read about it, watch the trailer, and see which episodes you still need.
 
 ## Development
 

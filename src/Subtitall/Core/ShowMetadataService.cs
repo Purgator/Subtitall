@@ -67,6 +67,52 @@ public sealed class ShowMetadataService(
         return aliases.Where(a => a.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>
+    /// Show info from the chosen source, with TMDB filling what TVMaze lacks (the trailer; the
+    /// whole thing when the chosen source fails). TVMaze fills in when TMDB is the pick but down.
+    /// </summary>
+    public async Task<ShowInfo?> GetInfoAsync(string source, int showId, string showName, CancellationToken ct = default)
+    {
+        var info = await GuardedInfo(
+            () => source == TmdbService.SourceName ? tmdb.GetShowInfoAsync(showId, ct) : tvmaze.GetShowInfoAsync(showId, ct),
+            source);
+
+        if (info is { TrailerUrl: not null })
+            return info;
+        var other = await FindOnOtherSourceAsync(source, showName, ct);
+        if (other is null)
+            return info;
+        var otherInfo = await GuardedInfo(
+            () => other.Source == TmdbService.SourceName ? tmdb.GetShowInfoAsync(other.Id, ct) : tvmaze.GetShowInfoAsync(other.Id, ct),
+            other.Source);
+        if (info is null)
+            return otherInfo;
+        return otherInfo is null ? info : info with
+        {
+            TrailerUrl = otherInfo.TrailerUrl,
+            Summary = info.Summary ?? otherInfo.Summary,
+            ImageUrl = info.ImageUrl ?? otherInfo.ImageUrl,
+            OfficialSite = info.OfficialSite ?? otherInfo.OfficialSite,
+        };
+    }
+
+    private async Task<ShowInfo?> GuardedInfo(Func<Task<ShowInfo?>> call, string source)
+    {
+        try
+        {
+            return await call();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "{Source} show info failed", source);
+            return null;
+        }
+    }
+
     private async Task<TvShow?> FindOnOtherSourceAsync(string source, string showName, CancellationToken ct)
     {
         if (source == TmdbService.SourceName)

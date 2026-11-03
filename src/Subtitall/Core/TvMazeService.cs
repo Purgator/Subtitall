@@ -48,6 +48,31 @@ public sealed class TvMazeService(IHttpClientFactory httpFactory)
             .ToList();
     }
 
+    /// <summary>Summary, genres, status, image… of a show. TVMaze has no trailers.</summary>
+    public async Task<ShowInfo?> GetShowInfoAsync(int showId, CancellationToken ct = default)
+    {
+        var http = httpFactory.CreateClient();
+        using var response = await http.GetAsync($"https://api.tvmaze.com/shows/{showId}", ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+        var show = await response.Content.ReadFromJsonAsync<ShowDto>(Json, ct);
+        if (show is null)
+            return null;
+        return new ShowInfo(
+            show.Name ?? "?",
+            ShowInfo.PlainText(show.Summary),
+            show.Genres ?? [],
+            show.Status,
+            show.Premiered,
+            show.Ended,
+            show.Network?.Name ?? show.WebChannel?.Name,
+            show.Image?.Original ?? show.Image?.Medium,
+            show.OfficialSite,
+            show.Rating?.Average,
+            TrailerUrl: null,
+            SourceName);
+    }
+
     /// <summary>Alternate titles ("akas") of a show — e.g. "Shingeki no Kyojin" for Attack on Titan.</summary>
     public async Task<IReadOnlyList<string>> GetAliasesAsync(int showId, CancellationToken ct = default)
     {
@@ -79,10 +104,22 @@ public sealed class TvMazeService(IHttpClientFactory httpFactory)
         public int Id { get; set; }
         public string? Name { get; set; }
         public string? Premiered { get; set; }
+        public string? Ended { get; set; }
+        public string? Status { get; set; }
+        public string? Summary { get; set; }
+        public List<string>? Genres { get; set; }
+        [JsonPropertyName("officialSite")]
+        public string? OfficialSite { get; set; }
+        public RatingDto? Rating { get; set; }
         public NamedDto? Network { get; set; }
         [JsonPropertyName("webChannel")]
         public NamedDto? WebChannel { get; set; }
         public ImageDto? Image { get; set; }
+    }
+
+    private sealed class RatingDto
+    {
+        public double? Average { get; set; }
     }
 
     private sealed class EpisodeDto
@@ -101,5 +138,6 @@ public sealed class TvMazeService(IHttpClientFactory httpFactory)
     private sealed class ImageDto
     {
         public string? Medium { get; set; }
+        public string? Original { get; set; }
     }
 }

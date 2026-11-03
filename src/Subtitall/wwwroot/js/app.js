@@ -39,6 +39,10 @@ const state = {
   langState: {},          // itemId -> { lang: "searching" | "failed:<msg>" }
   sources: {},            // itemId -> { lang: [{provider, status, found, detail}] } from the last search
   providerStatus: null,   // /api/providers/status
+  // shows view
+  shows: null,            // /api/shows (null = not loaded yet)
+  selectedShow: null,     // "source:id"
+  showDetails: null,      // /api/shows/{source}/{id}
   update: null,           // /api/update/status
   // rename view
   proposals: null,        // null = not loaded yet
@@ -142,6 +146,7 @@ function connectEvents() {
         if (type === "settings-changed") get("/api/settings").then((s) => { state.settings = s; if (state.view !== "settings") render(); });
         loadLibraryDebounced();
         if (state.view === "rename" && state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
+        if (state.shows !== null) { state.showDetails = null; loadShowsDebounced(); }
         break;
       case "batch-started":
         state.searching = true;
@@ -253,6 +258,7 @@ function renderMain() {
   const main = document.getElementById("main");
   if (state.view === "files") renderFilesView(main);
   else if (state.view === "rename") renderRenameView(main);
+  else if (state.view === "shows") renderShowsView(main);
   else renderSettingsView(main);
 }
 
@@ -830,6 +836,182 @@ function renderRenameGroupHtml(group, byItem) {
         </tbody>
       </table>
     </div>`;
+}
+
+// ---------- Shows view --------------------------------------------------------------------------
+
+// Guards against out-of-order responses when switching shows quickly.
+let showsToken = 0;
+
+async function loadShows() {
+  const token = ++showsToken;
+  try {
+    const shows = await get("/api/shows");
+    if (token !== showsToken) return;
+    state.shows = shows;
+    // Keep the selection if its show is still there, else pick the first one.
+    const key = (s) => `${s.show.source}:${s.show.id}`;
+    if (!state.selectedShow || !shows.some((s) => key(s) === state.selectedShow)) {
+      state.selectedShow = shows[0] ? key(shows[0]) : null;
+      state.showDetails = null;
+    }
+  } catch (err) {
+    if (token !== showsToken) return;
+    state.shows = [];
+    toast(`Could not list the shows: ${err.message}`, "err");
+  }
+  if (state.view === "shows") render();
+  if (state.selectedShow && !state.showDetails) loadShowDetails();
+}
+
+async function loadShowDetails() {
+  const key = state.selectedShow;
+  if (!key) return;
+  const [source, id] = key.split(":");
+  try {
+    const details = await get(`/api/shows/${encodeURIComponent(source)}/${encodeURIComponent(id)}`);
+    if (state.selectedShow !== key) return;
+    state.showDetails = details;
+  } catch (err) {
+    if (state.selectedShow !== key) return;
+    state.showDetails = { error: err.message };
+  }
+  if (state.view === "shows") renderShowDetails();
+}
+
+const loadShowsDebounced = debounce(() => loadShows().catch(console.error), 400);
+
+function renderShowsView(main) {
+  if (!state.items.length) {
+    main.innerHTML = `<div class="dropzone"><div class="title">No shows yet</div><div>Add some episodes in the Files tab first.</div></div>`;
+    return;
+  }
+  if (state.shows === null) {
+    main.innerHTML = `<div class="panel-empty"><span class="spin"></span> Detecting shows…</div>`;
+    loadShows();
+    return;
+  }
+  if (!state.shows.length) {
+    main.innerHTML = `<div class="dropzone"><div class="title">No show recognised</div><div>Pick the show for your files in the Files or Rename tab, and it shows up here.</div></div>`;
+    return;
+  }
+
+  main.innerHTML = `
+    <div class="shows-grid">
+      <div class="card shows-list">
+        ${state.shows.map((s) => {
+          const key = `${s.show.source}:${s.show.id}`;
+          return `
+            <div class="show-result show-entry ${state.selectedShow === key ? "selected" : ""}" data-key="${esc(key)}">
+              ${s.show.imageUrl ? `<img src="${esc(s.show.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
+              <div class="meta">
+                <div class="name">${esc(s.show.name)}</div>
+                <div class="sub">${s.have}/${s.aired} episodes${s.missing ? ` · <span class="missing">${s.missing} missing</span>` : " · complete"}</div>
+              </div>
+            </div>`;
+        }).join("")}
+      </div>
+      <div class="card" id="show-details"></div>
+    </div>`;
+
+  main.querySelectorAll("[data-key]").forEach((el) => {
+    el.onclick = () => {
+      if (state.selectedShow === el.dataset.key) return;
+      state.selectedShow = el.dataset.key;
+      state.showDetails = null;
+      render();
+      loadShowDetails();
+    };
+  });
+  renderShowDetails();
+}
+
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + (iso.length === 10 ? "T00:00:00" : ""));
+  return isNaN(d) ? iso : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function renderShowDetails() {
+  const panel = document.getElementById("show-details");
+  if (!panel) return;
+  const d = state.showDetails;
+  if (!d) {
+    panel.innerHTML = `<div class="panel-empty"><span class="spin"></span> Loading show…</div>`;
+    return;
+  }
+  if (d.error) {
+    panel.innerHTML = `<div class="panel-empty warn-text">${esc(d.error)}</div>`;
+    return;
+  }
+
+  const info = d.info || {};
+  const facts = [
+    info.premiered ? fmtDate(info.premiered).slice(-4) + (info.ended ? `–${fmtDate(info.ended).slice(-4)}` : "") : null,
+    info.status,
+    info.network || d.show.network,
+    info.rating ? `★ ${info.rating}` : null,
+    d.show.source,
+  ].filter(Boolean);
+
+  const missingSeasons = d.seasons.filter((s) => s.missing > 0);
+  const nextUnaired = d.seasons.flatMap((s) => s.episodes).find((e) => !e.aired);
+
+  panel.innerHTML = `
+    <div class="show-head">
+      ${info.imageUrl || d.show.imageUrl ? `<img class="poster" src="${esc(info.imageUrl || d.show.imageUrl)}" alt="">` : `<div class="poster img-placeholder"></div>`}
+      <div class="show-head-meta">
+        <h2>${esc(d.show.name)}</h2>
+        <div class="facts">${esc(facts.join(" · "))}</div>
+        ${info.genres?.length ? `<div class="genres">${info.genres.map((g) => `<span class="genre">${esc(g)}</span>`).join("")}</div>` : ""}
+        ${info.summary ? `<p class="summary">${esc(info.summary)}</p>` : `<p class="summary hint-text">No summary available.</p>`}
+        <div class="show-actions">
+          ${info.trailerUrl ? `<button class="btn small" data-open="${esc(info.trailerUrl)}">▶ Watch trailer</button>` : `<span class="hint-text">No trailer listed${state.settings?.tmdb?.enabled ? "" : " — enable TMDB in Settings for trailers"}</span>`}
+          ${info.officialSite ? `<button class="btn small secondary" data-open="${esc(info.officialSite)}">Official site</button>` : ""}
+        </div>
+        <div class="coverage-line">
+          <b>${d.have}</b> of <b>${d.aired}</b> aired episodes linked
+          ${d.missing ? ` · <span class="missing">${d.missing} missing</span>` : " · complete"}
+          ${d.unaired ? ` · ${d.unaired} not aired yet${nextUnaired?.airdate ? ` (next: ${esc(fmtDate(nextUnaired.airdate))})` : ""}` : ""}
+          · ${d.files} file${d.files === 1 ? "" : "s"}
+        </div>
+      </div>
+    </div>
+
+    <div class="show-section">
+      <div class="panel-title">Missing episodes</div>
+      ${missingSeasons.length === 0
+        ? `<div class="hint-text" style="padding:0 14px 12px">Every aired episode has a file. 🎉</div>`
+        : missingSeasons.map((s) => `
+          <div class="missing-season">
+            <div class="missing-season-head">Season ${s.season} — ${s.missing} of ${s.aired} missing</div>
+            <div class="missing-list">
+              ${s.episodes.filter((e) => e.aired && !e.have).map((e) => `
+                <span class="missing-ep" title="${esc(e.name)}${e.airdate ? ` · ${fmtDate(e.airdate)}` : ""}">S${String(e.season).padStart(2, "0")}E${String(e.number).padStart(2, "0")}</span>`).join("")}
+            </div>
+          </div>`).join("")}
+    </div>
+
+    <div class="show-section">
+      <div class="panel-title">Viewing order</div>
+      ${d.seasons.map((s) => `
+        <details class="season" ${s.missing > 0 || d.seasons.length === 1 ? "open" : ""}>
+          <summary>Season ${s.season} <span class="hint-text">· ${s.have}/${s.aired} linked${s.unaired ? ` · ${s.unaired} upcoming` : ""}</span></summary>
+          <table class="episode-table">
+            ${s.episodes.map((e) => `
+              <tr class="${e.have ? "have" : e.aired ? "missing" : "unaired"}">
+                <td class="ep">S${String(e.season).padStart(2, "0")}E${String(e.number).padStart(2, "0")}</td>
+                <td class="ep-name" title="${esc(e.name)}">${esc(e.name) || "<i>untitled</i>"}</td>
+                <td class="ep-date">${esc(fmtDate(e.airdate))}</td>
+                <td class="ep-file" title="${esc(e.fileName || "")}">${e.have ? "✓ " + esc(e.fileName) : e.aired ? "missing" : "not aired yet"}</td>
+              </tr>`).join("")}
+          </table>
+        </details>`).join("")}
+    </div>`;
+
+  panel.querySelectorAll("[data-open]").forEach((btn) => {
+    btn.onclick = () => post("/api/shell/open", { url: btn.dataset.open }).catch((e) => toast(e.message, "err"));
+  });
 }
 
 // ---------- Settings view --------------------------------------------------------------------------

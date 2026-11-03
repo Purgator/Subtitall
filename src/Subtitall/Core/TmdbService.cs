@@ -37,6 +37,39 @@ public sealed class TmdbService(IHttpClientFactory httpFactory, SettingsService 
             .ToList();
     }
 
+    /// <summary>Overview, genres, status, poster… plus the official YouTube trailer when TMDB lists one.</summary>
+    public async Task<ShowInfo?> GetShowInfoAsync(int showId, CancellationToken ct = default)
+    {
+        var show = await GetAsync<ShowDto>($"/tv/{showId}", ct);
+        if (show is null)
+            return null;
+        return new ShowInfo(
+            show.Name ?? "?",
+            show.Overview,
+            (show.Genres ?? []).Select(g => g.Name ?? "").Where(n => n.Length > 0).ToList(),
+            show.Status,
+            show.FirstAirDate,
+            show.LastAirDate,
+            show.Networks?.FirstOrDefault()?.Name,
+            show.PosterPath is { Length: > 0 } poster ? "https://image.tmdb.org/t/p/w500" + poster : null,
+            show.Homepage,
+            show.VoteAverage is > 0 ? Math.Round(show.VoteAverage.Value, 1) : null,
+            await GetTrailerUrlAsync(showId, ct),
+            SourceName);
+    }
+
+    /// <summary>YouTube link of the best trailer (official first, then any trailer, then a teaser).</summary>
+    public async Task<string?> GetTrailerUrlAsync(int showId, CancellationToken ct = default)
+    {
+        var videos = await GetAsync<VideosDto>($"/tv/{showId}/videos", ct);
+        var best = (videos?.Results ?? [])
+            .Where(v => string.Equals(v.Site, "YouTube", StringComparison.OrdinalIgnoreCase) && v.Key is { Length: > 0 })
+            .OrderByDescending(v => v.Type == "Trailer" ? 2 : v.Type == "Teaser" ? 1 : 0)
+            .ThenByDescending(v => v.Official == true)
+            .FirstOrDefault();
+        return best is null ? null : "https://www.youtube.com/watch?v=" + Uri.EscapeDataString(best.Key!);
+    }
+
     /// <summary>All episodes of a show — TMDB serves them one season at a time.</summary>
     public async Task<IReadOnlyList<TvEpisode>> GetEpisodesAsync(int showId, CancellationToken ct = default)
     {
@@ -91,9 +124,34 @@ public sealed class TmdbService(IHttpClientFactory httpFactory, SettingsService 
     {
         public int Id { get; set; }
         public string? Name { get; set; }
+        public string? Overview { get; set; }
+        public string? Status { get; set; }
+        public string? Homepage { get; set; }
         public string? FirstAirDate { get; set; }
+        public string? LastAirDate { get; set; }
         public string? PosterPath { get; set; }
+        public double? VoteAverage { get; set; }
         public int? NumberOfSeasons { get; set; }
+        public List<NamedDto>? Genres { get; set; }
+        public List<NamedDto>? Networks { get; set; }
+    }
+
+    private sealed class NamedDto
+    {
+        public string? Name { get; set; }
+    }
+
+    private sealed class VideosDto
+    {
+        public List<VideoDto>? Results { get; set; }
+    }
+
+    private sealed class VideoDto
+    {
+        public string? Site { get; set; }
+        public string? Key { get; set; }
+        public string? Type { get; set; }
+        public bool? Official { get; set; }
     }
 
     private sealed class SeasonDto

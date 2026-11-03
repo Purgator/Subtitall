@@ -139,6 +139,80 @@ public static class Endpoints
             return Results.NoContent();
         });
 
+        api.MapPost("/shell/open", (OpenUrlRequest request) =>
+        {
+            // Only web links, and only ones we produced (trailers, official sites).
+            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                return Results.BadRequest(new { message = "Not a web link" });
+            if (ElectronBridge.IsActive)
+                Electron.Shell.OpenExternalAsync(uri.ToString());
+            else if (OperatingSystem.IsWindows())
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
+            return Results.NoContent();
+        });
+
+        // ---- Shows (detected in the library) ---------------------------------
+        // Every show the linked files were matched to, with how much of it they cover.
+        api.MapGet("/shows", async (LibraryService library, MediaDetectionService detection, CancellationToken ct) =>
+        {
+            var items = library.GetAll();
+            await detection.EnsureAsync(items, ct);
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var shows = items
+                .Where(i => i.Detection?.Show is not null)
+                .GroupBy(i => ShowDetectionService.Key(i.Detection!.Show!.Show))
+                .Select(g =>
+                {
+                    var resolved = g.First().Detection!.Show!;
+                    var coverage = EpisodeCoverage.Compute(resolved.Episodes, LinkedFiles(g), today);
+                    return new
+                    {
+                        show = ShowDto(resolved.Show),
+                        files = g.Count(),
+                        seasons = coverage.Count,
+                        aired = coverage.Sum(s => s.Aired),
+                        have = coverage.Sum(s => s.Have),
+                        missing = coverage.Sum(s => s.Missing),
+                        unaired = coverage.Sum(s => s.Unaired),
+                    };
+                })
+                .OrderBy(s => s.show.Name)
+                .ToList();
+            return Results.Ok(shows);
+        });
+
+        // Full picture of one show: metadata, trailer, every episode in viewing order with
+        // the linked file that covers it, and what's missing.
+        api.MapGet("/shows/{source}/{id:int}", async (
+            string source, int id, LibraryService library, ShowDetectionService shows,
+            MediaDetectionService detection, CancellationToken ct) =>
+        {
+            var items = library.GetAll();
+            await detection.EnsureAsync(items, ct);
+            var linked = items
+                .Where(i => i.Detection?.Show is { } s && s.Show.Source == source && s.Show.Id == id)
+                .ToList();
+            var resolved = linked.FirstOrDefault()?.Detection?.Show;
+            if (resolved is null)
+                return Results.NotFound();
+
+            var infoTask = shows.GetInfoAsync(resolved.Show, ct);
+            var coverage = EpisodeCoverage.Compute(resolved.Episodes, LinkedFiles(linked), DateOnly.FromDateTime(DateTime.Today));
+            var info = await infoTask;
+            return Results.Ok(new
+            {
+                show = ShowDto(resolved.Show),
+                info,
+                aliases = resolved.Aliases,
+                files = linked.Count,
+                seasons = coverage,
+                aired = coverage.Sum(s => s.Aired),
+                have = coverage.Sum(s => s.Have),
+                missing = coverage.Sum(s => s.Missing),
+                unaired = coverage.Sum(s => s.Unaired),
+            });
+        });
+
         // ---- Subtitles -----------------------------------------------------
         api.MapPost("/subtitles/search", (SearchRequest request, BatchSearchService batch) =>
             batch.Start(request.ItemIds)
@@ -370,14 +444,18 @@ public static class Endpoints
         subtitles = item.Subtitles,
     };
 
-    private static object ShowDto(TvShow show) => new
-    {
-        show.Id, show.Name, show.Premiered, show.Network, show.ImageUrl, show.Source,
-    };
+    private static TvShow ShowDto(TvShow show) => show;
+
+    private static IEnumerable<EpisodeCoverage.LinkedFile> LinkedFiles(IEnumerable<MediaItem> items) =>
+        items
+            .Where(i => i.Effective is { Season: not null, Episode: not null })
+            .Select(i => new EpisodeCoverage.LinkedFile(
+                i.Effective.Season!.Value, i.Effective.Episode!.Value, i.Effective.EndEpisode, i.FileName));
 
     public sealed record AddPathsRequest(List<string>? Paths);
     public sealed record BrowseRequest(string Mode);
     public sealed record RevealRequest(string ItemId);
+    public sealed record OpenUrlRequest(string Url);
     public sealed record SearchRequest(List<string>? ItemIds);
     public sealed record DownloadRequest(string ItemId, SubtitleCandidate Candidate);
     public sealed record ProposalsRequest(List<string>? ItemIds);
