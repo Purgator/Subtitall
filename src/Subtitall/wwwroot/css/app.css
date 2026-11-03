@@ -127,6 +127,32 @@ body {
 .hint-text a, .hint-text .linkish { color: var(--accent); cursor: pointer; text-decoration: none; }
 .hint-text .linkish:hover { text-decoration: underline; }
 .warn-text { color: var(--err); font-size: 12.5px; }
+.ok-text { color: var(--ok); }
+
+.source-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  cursor: help;
+}
+.source-pill.warn { background: var(--err-bg); color: var(--err); }
+
+.sources-panel { padding: 10px 16px 6px; border-bottom: 1px solid var(--border); }
+.sources-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin-bottom: 6px; }
+.source-row { display: flex; gap: 10px; font-size: 12.5px; padding: 2px 0; }
+.source-row .source-name { min-width: 110px; color: var(--text-bright); }
+.source-row .source-detail { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.source-row.ok .source-detail { color: var(--ok); }
+.source-row.warn .source-detail { color: var(--err); }
+
+.provider-status { margin-left: auto; font-size: 12px; color: var(--dim); white-space: nowrap; }
+.provider-status.ok { color: var(--ok); }
+.provider-status.warn { color: var(--err); }
+.settings-autosave { padding: 10px 18px; }
+#top-update { display: inline-flex; align-items: center; gap: 6px; }
 
 .file-table { width: 100%; border-collapse: collapse; }
 

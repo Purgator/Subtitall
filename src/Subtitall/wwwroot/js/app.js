@@ -37,6 +37,9 @@ const state = {
   searching: false,
   progress: { done: 0, total: 0 },
   langState: {},          // itemId -> { lang: "searching" | "failed:<msg>" }
+  sources: {},            // itemId -> { lang: [{provider, status, found, detail}] } from the last search
+  providerStatus: null,   // /api/providers/status
+  update: null,           // /api/update/status
   // rename view
   proposals: null,        // null = not loaded yet
   proposalChecks: {},     // itemId -> bool
@@ -48,6 +51,14 @@ const state = {
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function sourceClass(status) {
+  switch (status) {
+    case "found": return "ok";
+    case "nothing": case "notApplicable": case "off": return "dim";
+    default: return "warn";
+  }
 }
 
 function formatSize(bytes) {
@@ -96,12 +107,15 @@ const loadLibraryDebounced = debounce(() => loadLibrary().catch(console.error), 
 const loadProposalsDebounced = debounce(() => loadProposals().catch(console.error), 400);
 
 async function loadAll() {
-  const [meta, settings, items] = await Promise.all([
+  const [meta, settings, items, providerStatus, update] = await Promise.all([
     get("/api/meta"), get("/api/settings"), get("/api/library"),
+    get("/api/providers/status").catch(() => null), get("/api/update/status").catch(() => null),
   ]);
   state.meta = meta;
   state.settings = settings;
   state.items = items;
+  state.providerStatus = providerStatus;
+  state.update = update;
 }
 
 // ---------- Server-sent events -------------------------------------------------------
@@ -124,7 +138,8 @@ function connectEvents() {
     switch (type) {
       case "library-changed":
       case "settings-changed":
-        if (type === "settings-changed") get("/api/settings").then((s) => { state.settings = s; render(); });
+        // The settings form saves itself and must not be rebuilt under the user's cursor.
+        if (type === "settings-changed") get("/api/settings").then((s) => { state.settings = s; if (state.view !== "settings") render(); });
         loadLibraryDebounced();
         if (state.view === "rename" && state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
         break;
@@ -132,6 +147,7 @@ function connectEvents() {
         state.searching = true;
         state.progress = { done: 0, total: data.total };
         state.langState = {};
+        state.sources = {};
         render();
         break;
       case "item-searching": {
@@ -143,6 +159,7 @@ function connectEvents() {
       }
       case "item-result": {
         const langs = (state.langState[data.itemId] ??= {});
+        if (data.sources?.length) (state.sources[data.itemId] ??= {})[data.language] = data.sources;
         if (data.downloaded || data.skipped) {
           delete langs[data.language];
           const item = state.items.find((i) => i.id === data.itemId);
@@ -155,8 +172,11 @@ function connectEvents() {
         renderFilesRow(data.itemId);
         break;
       }
-      case "update-downloaded":
-        toast(`Update v${data.version} downloaded — it will install when you close the app`, "ok", 10000);
+      case "update-status":
+        state.update = data;
+        renderUpdateStatus();
+        if (data.state === "downloaded") toast(data.message, "ok", 10000);
+        else if (data.state === "error") toast(data.message, "err", 8000);
         break;
       case "batch-finished": {
         state.searching = false;
@@ -166,6 +186,7 @@ function connectEvents() {
         toast(`Search ${data.cancelled ? "cancelled" : "finished"} — ${parts.join(", ")}`,
           data.downloaded > 0 ? "ok" : (data.failed > 0 ? "err" : "info"), 6000);
         loadLibraryDebounced();
+        loadProviderStatus();
         break;
       }
     }
@@ -220,6 +241,7 @@ function render() {
 
 function renderTopbar() {
   document.getElementById("top-version").textContent = `v${state.meta.version}`;
+  renderUpdateStatus();
   const progress = document.getElementById("top-progress");
   progress.hidden = !state.searching;
   if (state.searching)
@@ -283,7 +305,8 @@ function renderFilesView(main) {
       <div class="grow"></div>
       ${providers.length === 0
         ? `<span class="warn-text">No subtitle provider configured — <span class="linkish" id="goto-settings">open Settings</span></span>`
-        : `<span class="hint-text">Click a language chip to pick a subtitle manually</span>`}
+        : `<span class="hint-text" id="sources-line">${sourcesLineHtml()}</span>
+           <span class="hint-text">· click a chip for details or to pick a subtitle</span>`}
       ${state.searching
         ? `<button class="btn danger" id="cancel-search">Cancel search</button>`
         : `<button class="btn" id="start-search" ${providers.length ? "" : "disabled"}>Search subtitles</button>`}
@@ -318,10 +341,12 @@ function renderFileRowHtml(item) {
   const langStates = state.langState[item.id] || {};
   const chips = languages.map((lang) => {
     const st = langStates[lang];
+    const sources = state.sources[item.id]?.[lang];
     let cls = "", title = `Search ${lang} subtitles for this file`;
     if (st === "searching") { cls = "searching"; title = "Searching…"; }
     else if (st?.startsWith("failed:")) { cls = "failed"; title = st.slice(7); }
     else if (item.subtitles?.[lang]) { cls = "have"; title = `${lang} subtitle present — click to replace`; }
+    if (sources) title += "\n" + sources.map((x) => `${x.provider}: ${x.detail}`).join("\n");
     return `<span class="lang-chip ${cls}" data-item="${item.id}" data-lang="${esc(lang)}" title="${esc(title)}">${esc(lang)}</span>`;
   }).join("");
 
@@ -391,9 +416,9 @@ async function openCandidatesModal(itemId, language) {
   root.querySelector("#modal-close").onclick = close;
   root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
 
-  let candidates;
+  let candidates, sources;
   try {
-    candidates = await get(`/api/subtitles/candidates?itemId=${encodeURIComponent(itemId)}&language=${encodeURIComponent(language)}`);
+    ({ candidates, sources } = await get(`/api/subtitles/candidates?itemId=${encodeURIComponent(itemId)}&language=${encodeURIComponent(language)}`));
   } catch (err) {
     if (token !== modalToken) return; // modal was closed/replaced meanwhile
     const body = root.querySelector(".modal-body");
@@ -404,12 +429,27 @@ async function openCandidatesModal(itemId, language) {
   if (token !== modalToken) return; // modal was closed/replaced meanwhile
   const body = root.querySelector(".modal-body");
   if (!body) return;
+
+  // What was tried earlier in the batch (downloads, quotas) is more telling than this fresh
+  // search alone, so the batch outcome wins when there is one for this file + language.
+  const batchSources = state.sources[itemId]?.[language];
+  const sourcesHtml = `
+    <div class="sources-panel">
+      <div class="sources-title">${batchSources ? "Last search" : "Sources"}</div>
+      ${(batchSources || sources || []).map((x) => `
+        <div class="source-row ${sourceClass(x.status)}">
+          <span class="source-name">${esc(x.provider)}</span>
+          <span class="source-detail">${esc(x.detail || x.status)}</span>
+        </div>`).join("")}
+    </div>`;
+
   if (!candidates.length) {
-    body.innerHTML = `<div class="modal-empty">No subtitles found for this file in “${esc(language)}”.</div>`;
+    body.innerHTML = `${sourcesHtml}<div class="modal-empty">No subtitles found for this file in “${esc(language)}”.</div>`;
     return;
   }
 
   body.innerHTML = `
+    ${sourcesHtml}
     <table class="cand-table">
       <thead><tr><th>Score</th><th>Release</th><th>Provider</th><th>Downloads</th><th></th></tr></thead>
       <tbody>
@@ -794,13 +834,22 @@ function renderRenameGroupHtml(group, byItem) {
 
 // ---------- Settings view --------------------------------------------------------------------------
 
+// Settings save themselves: toggles and checkboxes right away, text fields shortly after typing stops.
+let settingsSaveTimer = null;
+let settingsSaveToken = 0;
+
 function renderSettingsView(main) {
   const s = state.settings;
   if (!s) { main.innerHTML = ""; return; }
   const selected = new Set(s.languages);
+  const u = state.update || {};
 
   main.innerHTML = `
     <div class="settings-page card">
+      <div class="settings-section settings-autosave">
+        <span id="settings-saved" class="hint-text">Changes are saved automatically.</span>
+      </div>
+
       <div class="settings-section">
         <h3>Subtitle languages</h3>
         <div class="desc">Subtitles are fetched for every selected language and saved as <code>video.&lt;lang&gt;.srt</code>.</div>
@@ -815,7 +864,7 @@ function renderSettingsView(main) {
 
       <div class="settings-section">
         <h3>Providers</h3>
-        <div class="desc">Searches run on every enabled provider; the best-scored subtitle wins.</div>
+        <div class="desc">Searches run on every enabled provider; the best-scored subtitle wins. Each provider's status is shown here and in the Files tab.</div>
 
         <div class="provider-card ${s.gestdown.enabled ? "enabled" : ""}" id="card-gestdown">
           <div class="head">
@@ -823,6 +872,7 @@ function renderSettingsView(main) {
             <span class="name">Gestdown</span>
             <span class="badge">no key needed</span>
             <span class="note">TV shows (Addic7ed mirror)</span>
+            <span class="provider-status" data-status="Gestdown"></span>
           </div>
         </div>
 
@@ -831,11 +881,17 @@ function renderSettingsView(main) {
             <label class="toggle"><input type="checkbox" id="os-enabled" ${s.openSubtitles.enabled ? "checked" : ""}><span class="slider"></span></label>
             <span class="name">OpenSubtitles</span>
             <span class="note">movies + TV — <a href="https://www.opensubtitles.com/en/consumers" target="_blank">get a free API key</a></span>
+            <span class="provider-status" data-status="OpenSubtitles"></span>
           </div>
           <div class="fields">
             <div class="settings-row"><label>API key</label><input class="input" id="os-key" value="${esc(s.openSubtitles.apiKey)}" placeholder="${state.meta?.builtInKeys?.openSubtitles ? "Using built-in key — paste yours to override" : "Required"}"></div>
             <div class="settings-row"><label>Username</label><input class="input" id="os-user" value="${esc(s.openSubtitles.username)}" placeholder="Optional — raises download quota"></div>
             <div class="settings-row"><label>Password</label><input class="input" id="os-pass" type="password" value="${esc(s.openSubtitles.password)}" placeholder="Optional"></div>
+            <div class="settings-row">
+              <label></label>
+              <button class="btn small secondary" id="os-test-login">Test login</button>
+              <span id="os-login-status" class="hint-text"></span>
+            </div>
           </div>
         </div>
 
@@ -844,6 +900,7 @@ function renderSettingsView(main) {
             <label class="toggle"><input type="checkbox" id="subdl-enabled" ${s.subDl.enabled ? "checked" : ""}><span class="slider"></span></label>
             <span class="name">SubDL</span>
             <span class="note">movies + TV — <a href="https://subdl.com/panel/api" target="_blank">get a free API key</a></span>
+            <span class="provider-status" data-status="SubDL"></span>
           </div>
           <div class="fields">
             <div class="settings-row"><label>API key</label><input class="input" id="subdl-key" value="${esc(s.subDl.apiKey)}" placeholder="Required"></div>
@@ -855,6 +912,7 @@ function renderSettingsView(main) {
             <label class="toggle"><input type="checkbox" id="subsource-enabled" ${s.subSource.enabled ? "checked" : ""}><span class="slider"></span></label>
             <span class="name">SubSource</span>
             <span class="note">movies + TV (Subscene archive) — <a href="https://subsource.net/profile" target="_blank">get a free API key</a></span>
+            <span class="provider-status" data-status="SubSource"></span>
           </div>
           <div class="fields">
             <div class="settings-row"><label>API key</label><input class="input" id="subsource-key" value="${esc(s.subSource.apiKey)}" placeholder="Required"></div>
@@ -893,7 +951,13 @@ function renderSettingsView(main) {
       </div>
 
       <div class="settings-section">
-        <button class="btn" id="save-settings">Save settings</button>
+        <h3>Updates</h3>
+        <div class="desc">Subtitall v${esc(state.meta.version)} — updates come from GitHub Releases and install when you restart the app.</div>
+        <div class="settings-row">
+          <button class="btn small secondary" id="check-updates" ${u.state === "checking" || u.state === "downloading" ? "disabled" : ""}>Check for updates</button>
+          <span id="update-status-text" class="hint-text">${updateStatusText()}</span>
+          ${u.state === "downloaded" ? `<button class="btn small" id="install-update">Restart to update</button>` : ""}
+        </div>
       </div>
     </div>`;
 
@@ -903,15 +967,9 @@ function renderSettingsView(main) {
     box.onchange = () => card.classList.toggle("enabled", box.checked);
   });
 
-  main.querySelector("#save-settings").onclick = async () => {
-    const languages = [...main.querySelectorAll("[data-lang]")]
-      .filter((box) => box.checked)
-      .map((box) => box.dataset.lang);
-    if (!languages.length) {
-      toast("Select at least one language", "err");
-      return;
-    }
-    const updated = {
+  const collect = () => {
+    const languages = [...main.querySelectorAll("[data-lang]")].filter((box) => box.checked).map((box) => box.dataset.lang);
+    return {
       ...s,
       languages,
       gestdown: { ...s.gestdown, enabled: main.querySelector("#gestdown-enabled").checked },
@@ -928,13 +986,159 @@ function renderSettingsView(main) {
       overwriteExisting: main.querySelector("#overwrite").checked,
       renameTemplate: main.querySelector("#rename-template").value.trim() || "{Show} - S{Season}E{Episode} - {Title}",
     };
+  };
+
+  const status = main.querySelector("#settings-saved");
+  const save = async () => {
+    const updated = collect();
+    if (!updated.languages.length) {
+      status.textContent = "Select at least one language.";
+      status.className = "warn-text";
+      return;
+    }
+    const token = ++settingsSaveToken;
+    status.textContent = "Saving…";
+    status.className = "hint-text";
     try {
-      state.settings = await put("/api/settings", updated);
-      toast("Settings saved", "ok");
+      const saved = await put("/api/settings", updated);
+      if (token !== settingsSaveToken) return;
+      state.settings = saved;
+      status.textContent = "Saved ✓";
+      status.className = "hint-text ok-text";
+      loadProviderStatus();
     } catch (err) {
-      toast(`Could not save: ${err.message}`, "err");
+      if (token !== settingsSaveToken) return;
+      status.textContent = `Could not save: ${err.message}`;
+      status.className = "warn-text";
     }
   };
+  const saveSoon = () => { clearTimeout(settingsSaveTimer); settingsSaveTimer = setTimeout(save, 600); };
+
+  main.querySelectorAll("input[type=checkbox]").forEach((box) => box.addEventListener("change", save));
+  main.querySelectorAll("input.input").forEach((input) => input.addEventListener("input", saveSoon));
+
+  main.querySelector("#os-test-login").onclick = async () => {
+    const btn = main.querySelector("#os-test-login");
+    const out = main.querySelector("#os-login-status");
+    btn.disabled = true;
+    out.textContent = "Logging in…";
+    try {
+      clearTimeout(settingsSaveTimer);
+      await save(); // Make sure the credentials being tested are the saved ones.
+      const result = await post("/api/providers/opensubtitles/login");
+      out.textContent = loginText(result);
+      out.className = result.ok ? "hint-text ok-text" : "warn-text";
+      loadProviderStatus();
+    } catch (err) {
+      out.textContent = err.message;
+      out.className = "warn-text";
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  main.querySelector("#check-updates").onclick = async () => {
+    try { state.update = await post("/api/update/check"); } catch (err) { toast(err.message, "err"); }
+    renderUpdateStatus();
+  };
+  const install = main.querySelector("#install-update");
+  if (install) install.onclick = () => post("/api/update/install").catch((e) => toast(e.message, "err"));
+
+  renderProviderStatus();
+}
+
+function loginText(login) {
+  if (!login) return "";
+  if (login.ok) return `Logged in as ${login.user}${login.allowedDownloads ? ` — ${login.allowedDownloads} downloads/day` : ""}`;
+  return login.error || "Login failed";
+}
+
+// ---------- Provider status (quotas, cooldowns, account) ----------------------------------------------
+
+async function loadProviderStatus() {
+  try {
+    state.providerStatus = await get("/api/providers/status");
+  } catch { return; }
+  renderProviderStatus();
+}
+
+function providerStatusText(p) {
+  if (!p.configured) return { text: "off", cls: "" };
+  const parts = [];
+  if (p.account) {
+    if (!p.account.hasCredentials) parts.push("anonymous (~5 downloads/day per IP)");
+    else if (p.account.login?.ok) parts.push(`logged in as ${p.account.login.user}`);
+    else if (p.account.login) parts.push(`login failed: ${p.account.login.error}`);
+    else parts.push("account set — login not tested yet");
+  }
+  if (p.quota) {
+    if (p.quota.exhausted) parts.push(`download quota used up${p.quota.resetAt ? `, resets ${new Date(p.quota.resetAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}`);
+    else if (p.quota.remaining != null) parts.push(`${p.quota.remaining} download${p.quota.remaining === 1 ? "" : "s"} left today`);
+  }
+  if (p.cooldownUntil && new Date(p.cooldownUntil) > new Date()) parts.push("paused after repeated failures");
+  const bad = p.quota?.exhausted || (p.account?.login && !p.account.login.ok) || p.cooldownUntil;
+  return { text: parts.join(" · ") || "ready", cls: bad ? "warn" : "ok" };
+}
+
+function renderProviderStatus() {
+  const list = state.providerStatus || [];
+  document.querySelectorAll("[data-status]").forEach((el) => {
+    const p = list.find((x) => x.name === el.dataset.status);
+    if (!p) return;
+    const { text, cls } = providerStatusText(p);
+    el.textContent = text;
+    el.className = `provider-status ${cls}`;
+  });
+  const os = list.find((x) => x.name === "OpenSubtitles");
+  const out = document.getElementById("os-login-status");
+  if (out && os?.account?.login && !out.textContent) {
+    out.textContent = loginText(os.account.login);
+    out.className = os.account.login.ok ? "hint-text ok-text" : "warn-text";
+  }
+  const line = document.getElementById("sources-line");
+  if (line) line.innerHTML = sourcesLineHtml();
+}
+
+// One line for the Files tab: which sources a search will use, and anything holding them back.
+function sourcesLineHtml() {
+  const list = state.providerStatus || [];
+  const on = list.filter((p) => p.configured);
+  if (!on.length) return "";
+  return "Sources: " + on.map((p) => {
+    const { text, cls } = providerStatusText(p);
+    return `<span class="source-pill ${cls}" title="${esc(text)}">${esc(p.name)}${cls === "warn" ? " ⚠" : ""}</span>`;
+  }).join(" ");
+}
+
+// ---------- Update status -----------------------------------------------------------------------------
+
+function updateStatusText() {
+  const u = state.update;
+  if (!u) return "";
+  return u.message || "";
+}
+
+function renderUpdateStatus() {
+  const u = state.update || {};
+  const top = document.getElementById("top-update");
+  if (top) {
+    const busy = u.state === "checking" || u.state === "downloading" || u.state === "available";
+    top.hidden = !(busy || u.state === "downloaded");
+    if (u.state === "downloaded") {
+      top.innerHTML = `<button class="btn small" id="top-install-update" title="${esc(u.message || "")}">Restart to update to v${esc(u.version || "")}</button>`;
+      top.querySelector("#top-install-update").onclick = () => post("/api/update/install").catch((e) => toast(e.message, "err"));
+    } else if (busy) {
+      const pct = u.state === "downloading" && u.percent != null ? ` ${Math.round(u.percent)}%` : "";
+      top.innerHTML = `<span class="spin"></span> ${esc(u.state === "checking" ? "Checking for updates…" : `Downloading update${u.version ? ` v${u.version}` : ""}…${pct}`)}`;
+    }
+  }
+  const text = document.getElementById("update-status-text");
+  if (text) {
+    text.textContent = updateStatusText();
+    const btn = document.getElementById("check-updates");
+    if (btn) btn.disabled = u.state === "checking" || u.state === "downloading";
+    if (u.state === "downloaded" && !document.getElementById("install-update") && state.view === "settings") render();
+  }
 }
 
 // ---------- Init ------------------------------------------------------------------------------------

@@ -67,7 +67,14 @@ Packaging facts (verified 2026-10; do not "fix" these):
 - `src/Subtitall/Api/` — minimal-API endpoints (`Endpoints.cs`), `EventBus` (SSE broadcast),
   `BatchSearchService` (one batch search at a time, progress events), `MediaDetectionService`
   (runs show detection + season guessing per title group after files are added, and before any
-  search or rename; sets `MediaItem.Detection`/`Guess`; providers read `MediaItem.Effective`).
+  search or rename; sets `MediaItem.Detection`/`Guess`; providers read `MediaItem.Effective`),
+  `UpdateService` (electron-updater events → `update-status` SSE + check/install endpoints).
+- **Search feedback is part of the contract**: `SubtitleSearchService` returns a `SearchReport`
+  with one `SourceOutcome` per provider (off / notApplicable / coolingDown / nothing / found /
+  downloadFailed / quota / error) and the batch publishes it with every `item-result`. A
+  provider that can't search a file says why through `ISubtitleProvider.CannotSearchReason`;
+  a used-up download quota is a `QuotaExceededException` (tracked in `ProviderHealth`, never a
+  circuit-breaker failure — searching still works). Enums serialize as camelCase strings.
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
   layout (Files / Rename / Settings). Keep it simple and intuitive; do NOT style it after an IDE
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).

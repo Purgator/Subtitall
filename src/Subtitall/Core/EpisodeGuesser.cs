@@ -102,7 +102,7 @@ public static class EpisodeGuesser
             return new EpisodeGuess(fitting[0], number, null, GuessConfidence.High, $"Only season {fitting[0]} has an episode {number}");
 
         // Numbers running past every season, or past season 1 across the group, are absolute.
-        if (fitting.Count == 0 || highestBareNumber > episodesPerSeason[fitting[0]])
+        if (fitting.Count == 0 || highestBareNumber > episodesPerSeason![fitting[0]])
         {
             if (number >= 1 && number <= known.Count)
             {

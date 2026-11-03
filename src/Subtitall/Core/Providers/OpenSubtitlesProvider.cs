@@ -4,11 +4,15 @@ using System.Text.Json.Serialization;
 
 namespace Subtitall.Core.Providers;
 
+/// <summary>Outcome of the last OpenSubtitles login attempt, for the Settings page.</summary>
+public sealed record OpenSubtitlesLogin(bool Ok, string? User, int? AllowedDownloads, string? Error, DateTimeOffset At);
+
 /// <summary>
 /// OpenSubtitles REST API (api.opensubtitles.com v1). Requires a per-app API key;
 /// an optional user login raises the download quota (anonymous: 5/day/IP).
 /// </summary>
-public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogger<OpenSubtitlesProvider> logger)
+public sealed class OpenSubtitlesProvider(
+    IHttpClientFactory httpFactory, ProviderHealth health, ILogger<OpenSubtitlesProvider> logger)
     : ISubtitleProvider
 {
     public const string ProviderName = "OpenSubtitles";
@@ -26,6 +30,13 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
     private string? _token;
     private string _tokenKey = "";
     private DateTime _tokenIssuedUtc;
+
+    /// <summary>Last login attempt (null = never tried, e.g. no credentials entered).</summary>
+    public OpenSubtitlesLogin? LastLogin { get; private set; }
+
+    /// <summary>True when a username and password are set, i.e. downloads use the account quota.</summary>
+    public static bool HasCredentials(AppSettings settings) =>
+        settings.OpenSubtitles.Username.Trim().Length > 0 && settings.OpenSubtitles.Password.Length > 0;
 
     public string Name => ProviderName;
 
@@ -115,8 +126,11 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         var download = JsonSerializer.Deserialize<DownloadResponse>(response, Json);
         if (download?.Link is null)
             throw new InvalidOperationException("OpenSubtitles returned no download link");
+        var resetAt = ParseResetTime(download.ResetTimeUtc);
+        health.ReportQuota(ProviderName, download.Remaining, resetAt);
         if (download.Remaining is < 0)
-            throw new InvalidOperationException($"Download quota exceeded — {download.Message ?? "resets at midnight UTC"}");
+            throw new QuotaExceededException(
+                $"Daily download quota used up ({download.Message ?? "resets at midnight UTC"})", resetAt);
 
         var http = httpFactory.CreateClient();
         var bytes = await http.GetByteArrayAsync(download.Link, ct);
@@ -148,18 +162,50 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
             return await SendAsync(method, url, settings, jsonBody, withToken, ct, allowRetry: false);
         }
 
+        // A used-up quota comes back as 406 with a "download limit" message and the reset time.
+        if (response.StatusCode == System.Net.HttpStatusCode.NotAcceptable &&
+            content.Contains("limit", StringComparison.OrdinalIgnoreCase))
+        {
+            var limit = TryDeserialize<DownloadResponse>(content);
+            var resetAt = ParseResetTime(limit?.ResetTimeUtc);
+            health.ReportQuota(ProviderName, 0, resetAt);
+            throw new QuotaExceededException(
+                $"Daily download quota used up ({limit?.Message ?? "resets at midnight UTC"})", resetAt);
+        }
+
         if (!response.IsSuccessStatusCode)
             throw new ApiException((int)response.StatusCode, content, BuildErrorMessage(response.StatusCode, content));
         return content;
     }
 
+    /// <summary>Logs in with the current credentials (even if a token is cached) and reports the outcome.</summary>
+    public async Task<OpenSubtitlesLogin> TestLoginAsync(AppSettings settings, CancellationToken ct)
+    {
+        if (!HasCredentials(settings))
+            return new OpenSubtitlesLogin(false, null, null, "No username/password entered — downloads use the anonymous quota", DateTimeOffset.UtcNow);
+        InvalidateToken();
+        try
+        {
+            await GetTokenAsync(settings, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LastLogin = new OpenSubtitlesLogin(false, null, null, ex.Message, DateTimeOffset.UtcNow);
+        }
+        return LastLogin!;
+    }
+
     private async Task<string?> GetTokenAsync(AppSettings settings, CancellationToken ct)
     {
         var config = settings.OpenSubtitles;
-        if (config.Username.Trim().Length == 0 || config.Password.Length == 0)
+        if (!HasCredentials(settings))
             return null; // Anonymous mode — Api-Key only, 5 downloads/day/IP.
 
-        var cacheKey = $"{config.Username}|{ResolvedKey(settings)}";
+        var cacheKey = $"{config.Username}|{config.Password.GetHashCode()}|{ResolvedKey(settings)}";
         if (_token is not null && _tokenKey == cacheKey && DateTime.UtcNow - _tokenIssuedUtc < TimeSpan.FromHours(20))
             return _token;
 
@@ -181,13 +227,23 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
             using var response = await http.SendAsync(request, ct);
             var content = await response.Content.ReadAsStringAsync(ct);
             if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException($"OpenSubtitles login failed ({(int)response.StatusCode}) — check username/password");
+            {
+                var error = $"Login failed ({(int)response.StatusCode}) — check username/password";
+                LastLogin = new OpenSubtitlesLogin(false, null, null, error, DateTimeOffset.UtcNow);
+                throw new InvalidOperationException("OpenSubtitles " + error);
+            }
 
             var login = JsonSerializer.Deserialize<LoginResponse>(content, Json);
             if (login?.Token is null)
+            {
+                LastLogin = new OpenSubtitlesLogin(false, null, null, "Login returned no token", DateTimeOffset.UtcNow);
                 throw new InvalidOperationException("OpenSubtitles login returned no token");
+            }
 
             logger.LogInformation("Logged in to OpenSubtitles as {User}", config.Username);
+            LastLogin = new OpenSubtitlesLogin(true, config.Username.Trim(), login.User?.AllowedDownloads, null, DateTimeOffset.UtcNow);
+            if (login.User?.AllowedDownloads is int allowed && health.Quota(ProviderName) is null)
+                health.ReportQuota(ProviderName, allowed, null);
             _token = login.Token;
             _tokenKey = cacheKey;
             _tokenIssuedUtc = DateTime.UtcNow;
@@ -197,6 +253,15 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         {
             _loginLock.Release();
         }
+    }
+
+    private static DateTimeOffset? ParseResetTime(string? utc) =>
+        DateTimeOffset.TryParse(utc, null, System.Globalization.DateTimeStyles.AssumeUniversal, out var at) ? at : null;
+
+    private static T? TryDeserialize<T>(string json)
+    {
+        try { return JsonSerializer.Deserialize<T>(json, Json); }
+        catch (JsonException) { return default; }
     }
 
     private void InvalidateToken()
@@ -261,6 +326,9 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
         public string? Link { get; set; }
         public int? Remaining { get; set; }
         public string? Message { get; set; }
+
+        [JsonPropertyName("reset_time_utc")]
+        public string? ResetTimeUtc { get; set; }
     }
 
     private sealed class LoginResponse
@@ -269,5 +337,13 @@ public sealed class OpenSubtitlesProvider(IHttpClientFactory httpFactory, ILogge
 
         [JsonPropertyName("base_url")]
         public string? BaseUrl { get; set; }
+
+        public LoginUser? User { get; set; }
+    }
+
+    private sealed class LoginUser
+    {
+        [JsonPropertyName("allowed_downloads")]
+        public int? AllowedDownloads { get; set; }
     }
 }

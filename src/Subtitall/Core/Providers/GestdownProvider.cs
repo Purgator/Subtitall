@@ -25,12 +25,17 @@ public sealed class GestdownProvider(IHttpClientFactory httpFactory) : ISubtitle
 
     public bool IsConfigured(AppSettings settings) => settings.Gestdown.Enabled;
 
+    public string? CannotSearchReason(MediaItem item) =>
+        item.Effective is { Season: not null, Episode: not null } ? null
+        : item.Effective.IsEpisode ? "needs a season number (TV shows only)"
+        : "TV shows only";
+
     public async Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(
         MediaItem item, string language, AppSettings settings, CancellationToken ct)
     {
         var parsed = item.Effective;
         if (parsed.Season is not { } season || parsed.Episode is not { } episode)
-            return []; // TV shows only, and absolute anime numbering can't be queried here.
+            return []; // See CannotSearchReason.
 
         var showId = await GetShowIdAsync(parsed.Title, ct);
         if (showId is null && item.AlternateTitles is { Count: > 0 } alternates)

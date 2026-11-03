@@ -163,8 +163,8 @@ public static class Endpoints
             if (item is null)
                 return Results.NotFound();
             await detection.EnsureAsync([item], ct);
-            var candidates = await search.SearchAsync(item, language, ct);
-            return Results.Ok(candidates);
+            var report = await search.SearchAsync(item, language, ct);
+            return Results.Ok(new { report.Candidates, report.Sources });
         });
 
         api.MapPost("/subtitles/download", async (
@@ -179,6 +179,54 @@ public static class Endpoints
             events.Publish("library-changed");
             return Results.Ok(outcome);
         });
+
+        // ---- Providers (status, quotas, login) --------------------------------
+        api.MapGet("/providers/status", (
+            IEnumerable<ISubtitleProvider> providers, SettingsService settings, ProviderHealth health) =>
+        {
+            var config = settings.Current;
+            var now = DateTimeOffset.UtcNow;
+            return Results.Ok(providers.Select(p => new
+            {
+                name = p.Name,
+                configured = p.IsConfigured(config),
+                cooldownUntil = health.CooldownUntil(p.Name),
+                quota = health.Quota(p.Name) is { } q
+                    ? new { q.Remaining, q.ResetAt, exhausted = q.Exhausted(now) }
+                    : null,
+                // OpenSubtitles only: whether downloads go through an account, and if the login worked.
+                account = p is OpenSubtitlesProvider os
+                    ? new
+                    {
+                        hasCredentials = OpenSubtitlesProvider.HasCredentials(config),
+                        login = os.LastLogin,
+                    }
+                    : null,
+            }));
+        });
+
+        api.MapPost("/providers/opensubtitles/login", async (
+            IEnumerable<ISubtitleProvider> providers, SettingsService settings, CancellationToken ct) =>
+        {
+            var provider = providers.OfType<OpenSubtitlesProvider>().FirstOrDefault();
+            if (provider is null)
+                return Results.NotFound();
+            return Results.Ok(await provider.TestLoginAsync(settings.Current, ct));
+        });
+
+        // ---- Updates ---------------------------------------------------------
+        api.MapGet("/update/status", (UpdateService updates) => Results.Ok(updates.Status));
+
+        api.MapPost("/update/check", async (UpdateService updates) =>
+        {
+            await updates.CheckAsync();
+            return Results.Ok(updates.Status);
+        });
+
+        api.MapPost("/update/install", (UpdateService updates) =>
+            updates.Install()
+                ? Results.NoContent()
+                : Results.Conflict(new { message = "No downloaded update to install" }));
 
         // ---- Settings ------------------------------------------------------
         api.MapGet("/settings", (SettingsService settings) => Results.Ok(settings.Current));

@@ -28,12 +28,15 @@ public sealed class SubSourceProvider(IHttpClientFactory httpFactory) : ISubtitl
     public bool IsConfigured(AppSettings settings) =>
         settings.SubSource.Enabled && settings.SubSource.ApiKey.Trim().Length > 0;
 
+    public string? CannotSearchReason(MediaItem item) =>
+        item.Effective.IsEpisode && item.Effective.Season is null ? "needs a season number" : null;
+
     public async Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(
         MediaItem item, string language, AppSettings settings, CancellationToken ct)
     {
         var parsed = item.Effective;
         if (parsed.IsEpisode && (!parsed.Season.HasValue || !parsed.Episode.HasValue))
-            return []; // Absolute anime numbering can't be queried here.
+            return []; // See CannotSearchReason.
 
         var movieId = await FindTitleIdAsync(parsed.Title, parsed, settings, ct);
         if (movieId is null && item.AlternateTitles is { Count: > 0 } alternates)

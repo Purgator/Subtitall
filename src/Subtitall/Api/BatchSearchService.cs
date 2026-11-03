@@ -99,6 +99,7 @@ public sealed class BatchSearchService(
                         outcome.Skipped,
                         outcome.Provider,
                         outcome.Error,
+                        sources = outcome.Sources,
                         done,
                         total,
                     });

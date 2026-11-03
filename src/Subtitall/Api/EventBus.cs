@@ -7,7 +7,11 @@ namespace Subtitall.Api;
 /// <summary>Broadcasts app events to all connected UI clients over Server-Sent Events.</summary>
 public sealed class EventBus
 {
-    private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
     private readonly ConcurrentDictionary<Guid, Channel<string>> _subscribers = new();
 

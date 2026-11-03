@@ -27,12 +27,27 @@ public sealed record SubtitleCandidate
 /// <summary>Downloaded subtitle payload (always a single subtitle file, e.g. .srt).</summary>
 public sealed record SubtitlePayload(byte[] Content, string Extension);
 
+/// <summary>
+/// The provider refused a download because its quota is used up. Not a provider failure —
+/// searches still work — so it is reported as a quota, not fed to the circuit breaker.
+/// </summary>
+public sealed class QuotaExceededException(string message, DateTimeOffset? resetAt) : Exception(message)
+{
+    public DateTimeOffset? ResetAt { get; } = resetAt;
+}
+
 public interface ISubtitleProvider
 {
     string Name { get; }
 
     /// <summary>True when the provider is enabled and configured (API key present if needed).</summary>
     bool IsConfigured(AppSettings settings);
+
+    /// <summary>
+    /// Why this provider can't search for the given file (e.g. a TV-only source given a movie),
+    /// or null when it can. Lets the UI say "not applicable" instead of "nothing found".
+    /// </summary>
+    string? CannotSearchReason(MediaItem item) => null;
 
     /// <summary>Searches subtitles for one video in one language (ISO 639-1 code).</summary>
     Task<IReadOnlyList<SubtitleCandidate>> SearchAsync(

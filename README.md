@@ -20,10 +20,11 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
   - **SubSource** (hosts the former Subscene archive) — movies + TV, free API key
 - 🏆 **Best match wins** — results are ranked (exact file hash match, release-name similarity, popularity, hearing-impaired flag, provider reliability) and the best one downloads automatically. Prefer choosing yourself? Click a language chip to pick from the full list.
 - 🛡️ **Built for reliability** — searches fan out to every enabled source in parallel; a source that keeps failing is put in a short cooldown instead of slowing everything down; every download is validated (an HTML error page never gets saved as `.srt`) and falls back to the next-best candidate across sources, never retrying the same source more than twice.
+- 🔍 **No silent failures** — the Files tab says which sources a search uses, and every chip explains what each source did: found, nothing, can't search this kind of file, search error, download failed, cooling down, or *daily download quota used up* (with the reset time). A used-up quota is reported as such instead of looking like "nothing found", and the search keeps going on the other sources. OpenSubtitles account users see whether their login works and how many downloads are left today.
 - 🎯 **One detection for everything** — each file's show is identified once, on [TVMaze](https://www.tvmaze.com) (always on, keyless) and optionally [TMDB](https://www.themoviedb.org) (free API key), and both the subtitle search and the rename feature use that same answer. When the name is ambiguous (two *Battlestar Galactica*s, a spin-off with the same name) the app asks you to pick from a short list instead of guessing; you can change the show or the season at any time by clicking a file's *Detected* cell.
 - ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
-- 🔄 **Auto-update** — the app updates itself from GitHub Releases.
+- 🔄 **Auto-update** — the app updates itself from GitHub Releases, showing the download in the top bar; *Settings → Updates* has a *Check for updates* button and a *Restart to update* button once the update is ready.
 
 ## Install (Windows)
 
@@ -34,7 +35,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 ## Quick start
 
 1. **Add videos** — drop files or a folder into the window.
-2. *(Optional)* Open **Settings** (gear icon) to pick your languages and add provider API keys.
+2. *(Optional)* Open **Settings** to pick your languages and add provider API keys — changes save themselves. *Test login* under OpenSubtitles checks your account.
    Official builds ship **built-in keys for OpenSubtitles and TMDB**, so those work out of the
    box; a key you enter yourself always takes precedence.
    - OpenSubtitles: create a free key under [API consumers](https://www.opensubtitles.com/en/consumers). Adding your username/password raises your daily download quota (the built-in key alone is capped at ~5 downloads/day per IP).
@@ -44,7 +45,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
    - Gestdown and TVMaze need nothing; Gestdown is enabled by default (TV shows only).
    - SubDL and SubSource have no built-in key on purpose: their quotas are per key, so a
      shared key would be exhausted across all installs.
-3. Hit **Search subtitles**. Green chips = subtitle saved next to the video.
+3. Hit **Search subtitles**. Green chips = subtitle saved next to the video; red chips = nothing saved — hover or click the chip to see what each source said.
 4. **Rename episodes** (Rename tab): shows are detected for you — pick one where the app asks, fix a season if a guess is wrong, check the proposed names, click *Rename*.
 
 ## Development

@@ -7,6 +7,9 @@ using Subtitall.Core.Providers;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpClient();
+// Enums go out as camelCase strings ("quota", not 6) so the UI can read them.
+builder.Services.ConfigureHttpJsonOptions(o =>
+    o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 builder.Services.AddSingleton<TvMazeService>();
 builder.Services.AddSingleton<TmdbService>();
 builder.Services.AddSingleton<ShowMetadataService>();
@@ -23,6 +26,7 @@ builder.Services.AddSingleton<SubtitleSearchService>();
 builder.Services.AddSingleton<RenameService>();
 builder.Services.AddSingleton<EventBus>();
 builder.Services.AddSingleton<BatchSearchService>();
+builder.Services.AddSingleton<UpdateService>();
 
 builder.UseElectron(args, OnElectronAppReady);
 
@@ -54,33 +58,9 @@ static async Task OnElectronAppReady(IServiceProvider services)
     window.OnReadyToShow += () => window.Show();
     window.OnClosed += () => Electron.App.Quit();
 
-    await CheckForUpdatesAsync(services);
-}
-
-// Auto-update via GitHub Releases (electron-updater). In unpackaged dev runs the
-// updater no-ops by design, so this is safe to call unconditionally.
-static async Task CheckForUpdatesAsync(IServiceProvider services)
-{
-    var logger = services.GetRequiredService<ILogger<Program>>();
-    var events = services.GetRequiredService<EventBus>();
-    try
-    {
-        Electron.AutoUpdater.OnError += message =>
-            logger.LogWarning("Auto-updater: {Message}", message);
-        Electron.AutoUpdater.OnUpdateDownloaded += info =>
-        {
-            logger.LogInformation("Update {Version} downloaded", info.Version);
-            events.Publish("update-downloaded", new { version = info.Version });
-        };
-        // Downloads in the background and installs when the app quits
-        // (autoInstallOnAppQuit is electron-updater's default).
-        await Electron.AutoUpdater.CheckForUpdatesAndNotifyAsync();
-    }
-    catch (Exception ex)
-    {
-        // Never let update plumbing break app startup (e.g. offline).
-        logger.LogWarning(ex, "Update check failed");
-    }
+    // Auto-update via GitHub Releases (electron-updater), with its progress relayed to the
+    // UI. In unpackaged dev runs the updater no-ops by design, so this is safe to call.
+    await services.GetRequiredService<UpdateService>().CheckAsync();
 }
 
 public partial class Program;
