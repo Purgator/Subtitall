@@ -5,9 +5,18 @@
 
 Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming.
 
+![The Files tab during a search: one language chip per subtitle, green when saved, red when nothing was found, with the detected show and episode next to each file](docs/files.png)
+
 Inspired by [Subber](https://github.com/noembryo/Subber).
 
 ## Features
+
+| | |
+|---|---|
+| ![The Rename tab: files grouped by detected show, each with its proposed new name, and a short list to choose from when two shows share a name](docs/rename.png) | ![The Shows tab: poster, summary and trailer button of a show, its missing episodes, and the episode list in viewing order with the file covering each one](docs/shows.png) |
+| Rename episodes from the show's episode list. When a name is ambiguous, the app asks instead of guessing. | Read about each show and see which aired episodes you still have no file for. |
+| ![The subtitle picker opened from a language chip: what each source found, then the ranked subtitles with an exact-match badge and a Download button](docs/pick-subtitle.png) | ![The Settings tab: Gestdown and OpenSubtitles enabled with their status, SubDL and SubSource off](docs/settings.png) |
+| Click a chip to see what every source answered and pick a subtitle yourself. | Turn sources on or off; each one says whether it is ready and how many downloads are left. |
 
 - 🎬 **Link videos your way** — drag & drop files or folders anywhere in the window, or use the Add buttons. Folders are scanned recursively.
 - 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / `E02` / anime absolute numbering, year and release group are detected automatically, including season markers written into the title (`Show The Final Season - 15`, `Show Season 3 - 05`, `Show 2nd Season - 07`).
@@ -70,6 +79,18 @@ This starts the ASP.NET Core backend and opens the Electron window ([ElectronNET
 ```bash
 dotnet test
 ```
+
+### Screenshots
+
+```bash
+node tools/screenshots/capture.mjs
+```
+
+Regenerates the images of this README in `docs/`. The script serves the real UI
+(`src/Subtitall/wwwroot`) with fictional demo data (`tools/screenshots/demo-data.mjs`) in place of
+the backend and photographs each tab in headless Chrome or Edge (set `CHROME_PATH` if neither is
+in a standard location). It needs no npm package, never reads your settings and contacts no
+provider. Run it again after a visible UI change.
 
 ### Package a Windows installer
 

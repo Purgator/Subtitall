@@ -30,6 +30,7 @@ Rules for AI agents (and humans) working on this repository.
 |---|---|
 | Run desktop app (dev) | `dotnet run --project src/Subtitall` |
 | Tests | `dotnet test` |
+| README screenshots (`docs/*.png`, demo data, no backend) | `node tools/screenshots/capture.mjs` |
 | Package Windows installer | `dotnet publish src/Subtitall -c Release -r win-x64 --self-contained true` |
 
 Node.js 22+ must be on `PATH` (ElectronNET.Core launches Electron as a child process).
