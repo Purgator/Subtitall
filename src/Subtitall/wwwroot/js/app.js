@@ -186,6 +186,7 @@ function connectEvents() {
       case "update-status":
         state.update = data;
         renderUpdateStatus();
+        if (data.state === "downloaded" && state.view === "settings") render();
         if (data.state === "downloaded") toast(data.message, "ok", 10000);
         else if (data.state === "error") toast(data.message, "err", 8000);
         break;
@@ -1449,7 +1450,7 @@ function renderSettingsView(main) {
     renderUpdateStatus();
   };
   const install = main.querySelector("#install-update");
-  if (install) install.onclick = () => post("/api/update/install").catch((e) => toast(e.message, "err"));
+  if (install) install.onclick = installUpdate;
 
   renderProviderStatus();
 }
@@ -1525,18 +1526,53 @@ function updateStatusText() {
   return u.message || "";
 }
 
+// Asks the app to install the downloaded update. One click only: the whole window is covered at
+// once, so nothing can be clicked while the app closes and the installer takes over.
+let installRequested = false;
+
+async function installUpdate() {
+  if (installRequested) return;
+  installRequested = true;
+  renderInstallOverlay();
+  try {
+    await post("/api/update/install");
+  } catch (err) {
+    installRequested = false;
+    renderInstallOverlay();
+    toast(`Could not start the update: ${err.message}`, "err");
+  }
+}
+
+function renderInstallOverlay() {
+  const installing = installRequested || state.update?.state === "installing";
+  let overlay = document.getElementById("install-overlay");
+  if (!installing) { overlay?.remove(); return; }
+  if (overlay) return;
+  overlay = document.createElement("div");
+  overlay.id = "install-overlay";
+  overlay.className = "install-overlay";
+  overlay.innerHTML = `<div><span class="spin"></span> Installing the update…</div>
+    <div class="hint-text">Subtitall closes and reopens by itself. This takes a few seconds.</div>`;
+  document.body.appendChild(overlay);
+}
+
 function renderUpdateStatus() {
   const u = state.update || {};
+  // A failed install gives the window back (the backend reports an error state).
+  if (installRequested && u.state === "error") installRequested = false;
+  renderInstallOverlay();
   const top = document.getElementById("top-update");
   if (top) {
     const busy = u.state === "checking" || u.state === "downloading" || u.state === "available";
     top.hidden = !(busy || u.state === "downloaded");
     if (u.state === "downloaded") {
       top.innerHTML = `<button class="btn small" id="top-install-update" title="${esc(u.message || "")}">Restart to update to v${esc(u.version || "")}</button>`;
-      top.querySelector("#top-install-update").onclick = () => post("/api/update/install").catch((e) => toast(e.message, "err"));
+      top.querySelector("#top-install-update").onclick = installUpdate;
     } else if (busy) {
       const pct = u.state === "downloading" && u.percent != null ? ` ${Math.round(u.percent)}%` : "";
       top.innerHTML = `<span class="spin"></span> ${esc(u.state === "checking" ? "Checking for updates…" : `Downloading update${u.version ? ` v${u.version}` : ""}…${pct}`)}`;
+    } else {
+      top.innerHTML = "";
     }
   }
   const text = document.getElementById("update-status-text");

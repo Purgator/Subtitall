@@ -56,6 +56,16 @@ public class UpdateServiceTests
     }
 
     [Fact]
+    public void Nothing_is_installed_before_an_update_is_downloaded()
+    {
+        var updates = Create();
+        Assert.False(updates.BeginInstall());
+        updates.BeginCheck();
+        Assert.False(updates.BeginInstall());
+        Assert.Equal("checking", updates.Status.State);
+    }
+
+    [Fact]
     public void A_returned_check_reporting_a_newer_version_is_left_to_the_download_events()
     {
         var updates = Create();

@@ -12,7 +12,7 @@ public sealed record UpdateStatus(string State, string? Version, double? Percent
 /// <summary>
 /// Wraps electron-updater: relays its events to the UI (so an update never downloads behind the
 /// user's back without a word) and serves "check for updates" and "restart to install".
-/// States: idle, checking, upToDate, available, downloading, downloaded, error, unsupported.
+/// States: idle, checking, upToDate, available, downloading, downloaded, installing, error, unsupported.
 /// </summary>
 public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger)
 {
@@ -23,6 +23,7 @@ public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger
     private bool _wired;
     private int _check; // Which check is running — an old watchdog must not judge a newer check.
     private bool _updaterAnswered; // electron-updater said "checking" for the running check.
+    private bool _installing;
     private UpdateStatus _status = UpdateStatus.Idle("Not checked yet");
 
     public UpdateStatus Status
@@ -155,13 +156,62 @@ public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger
         lock (_lock) return _check == check && _status.State == "checking";
     }
 
-    /// <summary>Quits and installs the downloaded update.</summary>
-    public bool Install()
+    /// <summary>
+    /// Installs the downloaded update and restarts the app. Silently: the installer runs without
+    /// its wizard (asking where to install again makes no sense for an update, and the wizard
+    /// relaunching itself looked like two installs) and reopens the app when done.
+    /// </summary>
+    public bool Install() => BeginInstall() && RunInstall();
+
+    /// <summary>Only a downloaded update can be installed, and only once — a second click must not start a second installer.</summary>
+    internal bool BeginInstall()
     {
-        if (Status.State != "downloaded")
-            return false;
-        Electron.AutoUpdater.QuitAndInstall(false, true);
+        string? version;
+        lock (_lock)
+        {
+            if (_installing || _status.State != "downloaded")
+                return false;
+            _installing = true;
+            version = _status.Version;
+        }
+        Set(new UpdateStatus("installing", version, 100, "Installing the update — Subtitall restarts by itself", DateTimeOffset.UtcNow));
         return true;
+    }
+
+    private bool RunInstall()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // The app is about to be closed under the user's feet: take its windows away
+                // first, so there is nothing half-dead left to click on in the meantime.
+                foreach (var window in Electron.WindowManager.BrowserWindows.ToList())
+                    window.Hide();
+
+                Electron.AutoUpdater.QuitAndInstall(isSilent: true, isForceRunAfter: true);
+
+                // quitAndInstall asks Electron to quit, which has been seen to hang with the
+                // window still up. The installer is running by now — make sure we are gone.
+                await Task.Delay(TimeSpan.FromSeconds(4));
+                Electron.App.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Could not start the update installer");
+                foreach (var window in Electron.WindowManager.BrowserWindows.ToList())
+                    window.Show();
+                AbortInstall("Could not start the update installer: " + ex.Message);
+            }
+        });
+        return true;
+    }
+
+    /// <summary>The installer did not start: give the app back and let the user try again.</summary>
+    internal void AbortInstall(string message)
+    {
+        lock (_lock) _installing = false;
+        Set(new UpdateStatus("error", null, null, message, DateTimeOffset.UtcNow));
     }
 
     private void Set(UpdateStatus status)

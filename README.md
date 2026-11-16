@@ -35,7 +35,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 - ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 📺 **Shows tab** — every show your files were matched to, with its poster, summary, genres, status, network, rating, official site and trailer (trailers come from TMDB), the full episode list in viewing order with the file that covers each episode, and **what's missing**: aired episodes you have no file for, season by season (episodes that haven't aired yet are listed separately, with the next air date).
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
-- 🔄 **Auto-update** — the app updates itself from GitHub Releases, showing the download in the top bar; *Settings → Updates* has a *Check for updates* button and a *Restart to update* button once the update is ready.
+- 🔄 **Auto-update** — the app updates itself from GitHub Releases, showing the download in the top bar; *Settings → Updates* has a *Check for updates* button and a *Restart to update* button once the update is ready. Installing is silent: the app closes, updates in place without the setup wizard, and reopens by itself.
 
 ## Install (Windows)
 
