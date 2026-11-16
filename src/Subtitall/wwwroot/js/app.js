@@ -333,7 +333,7 @@ function renderFilesView(main) {
           <th class="col-size">Size</th>
           <th class="col-actions"></th>
         </tr></thead>
-        <tbody>${state.items.map(renderFileRowHtml).join("")}</tbody>
+        <tbody>${mediaGroups().map((group) => fileGroupRowHtml(group) + group.items.map(renderFileRowHtml).join("")).join("")}</tbody>
       </table>
     </div>`;
 
@@ -347,6 +347,15 @@ function renderFilesView(main) {
   const cancelBtn = main.querySelector("#cancel-search");
   if (cancelBtn) cancelBtn.onclick = () => post("/api/subtitles/cancel");
   bindFileRowActions(main);
+}
+
+function fileGroupRowHtml(group) {
+  const count = `${group.items.length} file${group.items.length === 1 ? "" : "s"}`;
+  let name = esc(group.name), detail = count;
+  if (group.kind === "show") detail += ` · ${esc(seasonsLabel(group.items))}`;
+  else if (group.kind === "title") { name = `“${name}”`; detail += " · show not known yet"; }
+  else if (group.kind === "movieSeries") detail = `${group.items.length} movies`;
+  return `<tr class="group-row"><td colspan="5"><b>${name}</b> <span class="hint-text">· ${detail}</span></td></tr>`;
 }
 
 function renderFileRowHtml(item) {
@@ -562,26 +571,54 @@ function nameSourceBadge(item) {
   return entry ? `<span class="guess-badge source" title="${esc(nameSourceText(item))}">${entry[0]}</span>` : "";
 }
 
-function groupKeyOf(item) {
-  return (item.parsed?.title || "").trim().toLowerCase();
+// The blocks the server sorted the files into: one per show (whatever name each file uses for
+// it) or movie series, each show split into season blocks (same folder, same name pattern).
+function mediaGroups(items = state.items) {
+  const groups = new Map();
+  for (const item of items) {
+    const g = item.group || { key: "other", kind: "other", name: "Other files", block: null };
+    if (!groups.has(g.key)) groups.set(g.key, { key: g.key, kind: g.kind, name: g.name, items: [], blocks: new Map() });
+    const group = groups.get(g.key);
+    group.items.push(item);
+    if (g.block != null) {
+      if (!group.blocks.has(g.block)) group.blocks.set(g.block, { key: g.block, items: [] });
+      group.blocks.get(g.block).items.push(item);
+    }
+  }
+  return [...groups.values()].map((g) => ({ ...g, blocks: [...g.blocks.values()] }));
 }
 
-function itemsOfTitle(title) {
-  const key = title.trim().toLowerCase();
-  return state.items.filter((i) => i.parsed?.isEpisode && groupKeyOf(i) === key);
+// The group a file is in right now (its key changes when the user picks another show).
+function groupOfItem(itemId) {
+  const item = state.items.find((i) => i.id === itemId);
+  return item ? mediaGroups().find((g) => g.key === (item.group?.key ?? "other")) : null;
 }
 
-async function chooseShow(title, show) {
+// "Season 2", "Seasons 1, 2", "Specials" — the seasons a set of files is seen as.
+function seasonsLabel(items) {
+  const seasons = [...new Set(items.map((i) => i.effective?.season).filter((s) => s != null))].sort((a, b) => a - b);
+  if (!seasons.length) return "Season not known";
+  const real = seasons.filter((s) => s > 0);
+  const parts = [];
+  if (real.length) parts.push(`Season${real.length > 1 ? "s" : ""} ${real.join(", ")}`);
+  if (seasons.includes(0)) parts.push("Specials");
+  return parts.join(" + ");
+}
+
+// The user's show pick applies to every filename title of the group.
+async function chooseShow(itemId, show) {
+  const group = groupOfItem(itemId);
+  if (!group) return;
+  const titles = [...new Set(group.items.filter((i) => i.parsed?.isEpisode).map((i) => i.parsed.title))];
   try {
-    await post("/api/library/show", { title, show });
+    for (const title of titles) await post("/api/library/show", { title, show });
     await loadLibrary();
   } catch (err) {
     toast(`Could not set the show: ${err.message}`, "err");
   }
 }
 
-async function setSeason(title, season) {
-  const itemIds = itemsOfTitle(title).map((i) => i.id);
+async function setSeason(itemIds, season) {
   try {
     await post("/api/library/season", { itemIds, season: season || null });
     await loadLibrary();
@@ -605,25 +642,39 @@ function isSameShow(a, b) {
   return !!a && !!b && a.id === b.id && a.source === b.source;
 }
 
-function seasonSelectHtml(group, current) {
-  const seasons = group[0]?.detection?.seasons?.length ? group[0].detection.seasons : Array.from({ length: 12 }, (_, i) => i + 1);
+// Season picker of one season block. It only matters to files whose name carries no season.
+function seasonSelectHtml(block) {
+  const current = block.items.find((i) => i.seasonOverride != null)?.seasonOverride ?? null;
+  const known = block.items.find((i) => i.detection?.seasons?.length)?.detection.seasons;
+  const seasons = known || Array.from({ length: 12 }, (_, i) => i + 1);
   return `
-    <select class="input season-select" title="Season for files whose name carries only an episode number">
+    <select class="input season-select" data-block="${esc(block.key)}" title="Season for these files — their names carry only an episode number">
       <option value="">Season: auto</option>
       ${seasons.map((s) => `<option value="${s}" ${current === s ? "selected" : ""}>Season ${s}</option>`).join("")}
     </select>`;
 }
 
-// Binds the show list + search box + season select inside `root` for one title group.
-function bindShowPicker(root, title, onChanged) {
+// A block whose files all spell out their season has nothing to pick.
+function blockNeedsSeason(block) {
+  return block.items.some((i) => i.parsed?.season == null);
+}
+
+// Binds the show list + search box + season pickers inside `root` for the group of one file.
+function bindShowPicker(root, itemId, onChanged) {
   root.querySelectorAll("[data-show]").forEach((el) => {
     el.onclick = async () => {
-      await chooseShow(title, JSON.parse(el.dataset.show));
+      await chooseShow(itemId, JSON.parse(el.dataset.show));
       onChanged?.();
     };
   });
-  const select = root.querySelector(".season-select");
-  if (select) select.onchange = async () => { await setSeason(title, Number(select.value)); onChanged?.(); };
+  root.querySelectorAll(".season-select").forEach((select) => {
+    select.onchange = async () => {
+      const block = groupOfItem(itemId)?.blocks.find((b) => b.key === select.dataset.block);
+      if (!block) return;
+      await setSeason(block.items.map((i) => i.id), Number(select.value));
+      onChanged?.();
+    };
+  });
 
   const input = root.querySelector(".show-search");
   const results = root.querySelector(".show-search-results");
@@ -637,10 +688,19 @@ function bindShowPicker(root, title, onChanged) {
         ? found.map((s) => showResultHtml(s, false)).join("")
         : `<div class="hint-text" style="padding:6px 2px">No results.</div>`;
       results.querySelectorAll("[data-show]").forEach((el) => {
-        el.onclick = async () => { await chooseShow(title, JSON.parse(el.dataset.show)); onChanged?.(); };
+        el.onclick = async () => { await chooseShow(itemId, JSON.parse(el.dataset.show)); onChanged?.(); };
       });
     }, 400);
   }
+}
+
+// One line per season block: what it is seen as, where it is, and its season picker.
+function blockLineHtml(group, block) {
+  const folders = new Set(group.items.map((i) => i.group?.folder));
+  const folder = folders.size > 1 ? block.items[0].group?.folder : "";
+  return `<b>${esc(seasonsLabel(block.items))}</b>
+    <span class="hint-text">· ${block.items.length} file${block.items.length === 1 ? "" : "s"}${folder ? ` · in “${esc(folder)}”` : ""}</span>
+    ${blockNeedsSeason(block) ? seasonSelectHtml(block) : ""}`;
 }
 
 let detectionModalToken = 0;
@@ -649,23 +709,23 @@ function openDetectionModal(itemId) {
   const item = state.items.find((i) => i.id === itemId);
   if (!item) return;
   if (!item.parsed?.isEpisode) { openIdentifyModal(itemId); return; }
-  const title = item.parsed.title;
   const token = ++detectionModalToken;
   const root = document.getElementById("modal-root");
   const close = () => { detectionModalToken++; root.innerHTML = ""; };
 
   const draw = () => {
     if (token !== detectionModalToken) return;
-    const group = itemsOfTitle(title);
-    const d = group[0]?.detection;
+    const group = groupOfItem(itemId);
+    if (!group) { close(); return; }
+    const files = group.items;
+    const d = files[0]?.detection;
     const current = d?.show || null;
     const candidates = d?.candidates || [];
-    const override = group.find((i) => i.seasonOverride != null)?.seasonOverride ?? null;
     root.innerHTML = `
       <div class="modal-backdrop">
         <div class="modal">
           <div class="modal-head">
-            <span class="title">“${esc(title)}” — ${group.length} file${group.length === 1 ? "" : "s"}</span>
+            <span class="title">${group.kind === "show" ? esc(group.name) : `“${esc(group.name)}”`} — ${files.length} file${files.length === 1 ? "" : "s"}</span>
             <button class="icon-btn" id="modal-close" title="Close">&#10005;</button>
           </div>
           <div class="modal-body detect-body">
@@ -682,12 +742,12 @@ function openDetectionModal(itemId) {
             <div class="detect-section">
               <div class="detect-label">Season</div>
               <div class="hint-text" style="margin-bottom:6px">For files whose name carries only an episode number (e.g. “- 15”). Files that spell out their season keep it.</div>
-              ${seasonSelectHtml(group, override)}
+              ${group.blocks.map((block) => `<div class="block-line">${blockLineHtml(group, block)}</div>`).join("")}
             </div>
             <div class="detect-section">
               <div class="detect-label">Files</div>
               <div class="hint-text" style="margin-bottom:6px">Wrong show or episode for one file only? Use <i>Identify</i> on its line.</div>
-              ${group.map((i) => `<div class="detect-file"><button class="btn small secondary" data-identify="${esc(i.id)}">Identify…</button> <span class="ep">${esc(episodeTag(i))}</span> ${esc(i.fileName)}${i.guess && i.guess.confidence !== "explicit" ? ` <span class="hint-text">— ${esc(i.guess.reason)}</span>` : ""}</div>`).join("")}
+              ${files.map((i) => `<div class="detect-file"><button class="btn small secondary" data-identify="${esc(i.id)}">Identify…</button> <span class="ep">${esc(episodeTag(i))}</span> ${esc(i.fileName)}${i.guess && i.guess.confidence !== "explicit" ? ` <span class="hint-text">— ${esc(i.guess.reason)}</span>` : ""}</div>`).join("")}
             </div>
           </div>
         </div>
@@ -695,7 +755,7 @@ function openDetectionModal(itemId) {
     root.querySelector("#modal-close").onclick = close;
     root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
     root.querySelectorAll("[data-identify]").forEach((btn) => { btn.onclick = () => openIdentifyModal(btn.dataset.identify); });
-    bindShowPicker(root, title, draw);
+    bindShowPicker(root, itemId, draw);
   };
   draw();
 }
@@ -912,19 +972,6 @@ async function loadProposals() {
   if (state.view === "rename") render();
 }
 
-function renameGroups() {
-  const groups = new Map();
-  for (const item of state.items) {
-    const d = item.detection;
-    const key = !item.parsed?.isEpisode ? "movies"
-      : d?.show ? `show:${d.show.source}:${d.show.id}`
-      : `title:${groupKeyOf(item)}`;
-    if (!groups.has(key)) groups.set(key, { key, items: [] });
-    groups.get(key).items.push(item);
-  }
-  return [...groups.values()].sort((a, b) => (a.key === "movies") - (b.key === "movies"));
-}
-
 function renderRenameView(main) {
   if (!state.items.length) {
     main.innerHTML = `<div class="dropzone"><div class="title">Nothing to rename yet</div><div>Add some episodes in the Files tab first.</div></div>`;
@@ -947,11 +994,10 @@ function renderRenameView(main) {
         ${state.renameBusy ? "Renaming…" : `Rename ${applicable.length} file${applicable.length === 1 ? "" : "s"}`}
       </button>
     </div>
-    ${renameGroups().map((group) => renderRenameGroupHtml(group, byItem)).join("")}`;
+    ${mediaGroups().map((group) => renderRenameGroupHtml(group, byItem)).join("")}`;
 
   main.querySelectorAll(".rename-group").forEach((card) => {
-    const title = card.dataset.title;
-    if (title) bindShowPicker(card, title, () => loadProposals());
+    if (card.dataset.item) bindShowPicker(card, card.dataset.item, () => loadProposals());
     card.querySelectorAll("[data-change]").forEach((btn) => { btn.onclick = () => openDetectionModal(btn.dataset.change); });
     card.querySelectorAll("[data-identify]").forEach((btn) => { btn.onclick = () => openIdentifyModal(btn.dataset.identify); });
   });
@@ -1000,15 +1046,21 @@ function renderRenameView(main) {
 function renderRenameGroupHtml(group, byItem) {
   const first = group.items[0];
   const d = first.detection;
-  const title = first.parsed?.title || "";
-  const override = group.items.find((i) => i.seasonOverride != null)?.seasonOverride ?? null;
+  const episodes = group.kind === "show" || group.kind === "title";
+  const titles = [...new Set(group.items.map((i) => i.parsed?.title || ""))];
+  const quoted = titles.map((t) => `“${t}”`).join(", ");
+  // One season block: its picker sits in the header. Several: each gets its own line below.
+  const single = group.blocks.length === 1 ? group.blocks[0] : null;
 
   let head;
-  if (group.key === "movies") {
-    head = `<div class="panel-title">Not TV episodes</div>
+  if (group.kind === "movieSeries") {
+    head = `<div class="panel-title">${esc(group.name)} — ${group.items.length} movies</div>
+      <div class="hint-text" style="padding:0 14px 10px">Movies are left alone. If one of them is an episode, <i>Identify</i> it.</div>`;
+  } else if (!episodes) {
+    head = `<div class="panel-title">Other files</div>
       <div class="hint-text" style="padding:0 14px 10px">Movies and files without an episode number are left alone. If one of them is an episode, <i>Identify</i> it.</div>`;
   } else if (!d) {
-    head = `<div class="panel-title">“${esc(title)}”</div>
+    head = `<div class="panel-title">“${esc(group.name)}”</div>
       <div class="hint-text" style="padding:0 14px 10px"><span class="spin"></span> Detecting the show…</div>`;
   } else if (d.status === "resolved") {
     const s = d.show;
@@ -1017,15 +1069,15 @@ function renderRenameGroupHtml(group, byItem) {
         ${s.imageUrl ? `<img src="${esc(s.imageUrl)}" alt="">` : `<div class="img-placeholder"></div>`}
         <div class="meta">
           <div class="name">${esc(s.name)}</div>
-          <div class="sub">${esc([s.premiered?.slice(0, 4), s.network, s.source, d.chosenByUser ? "chosen by you" : `detected from “${title}”`].filter(Boolean).join(" · "))}</div>
+          <div class="sub">${esc([s.premiered?.slice(0, 4), s.network, s.source, d.chosenByUser ? "chosen by you" : `detected from ${quoted}`].filter(Boolean).join(" · "))}</div>
         </div>
-        ${seasonSelectHtml(group.items, override)}
+        ${single && blockNeedsSeason(single) ? seasonSelectHtml(single) : ""}
         <button class="btn small secondary" data-change="${esc(first.id)}">Change show…</button>
       </div>`;
   } else {
     const why = d.status === "ambiguous"
-      ? `Several shows match “${esc(title)}” — which one is it?`
-      : `No show found for “${esc(title)}” — pick one or search for it:`;
+      ? `Several shows match ${esc(quoted)} — which one is it?`
+      : `No show found for ${esc(quoted)} — pick one or search for it:`;
     head = `
       <div class="group-head wrap">
         <div class="warn-text" style="flex-basis:100%">${why}</div>
@@ -1037,29 +1089,34 @@ function renderRenameGroupHtml(group, byItem) {
       </div>`;
   }
 
+  const rowHtml = (item) => {
+    const p = byItem[item.id];
+    if (!p) return "";
+    return `
+      <tr class="${p.problem ? "problem" : ""}">
+        <td class="col-check"><input type="checkbox" data-check="${esc(p.itemId)}"
+          ${state.proposalChecks[p.itemId] && p.canApply ? "checked" : ""} ${p.canApply ? "" : "disabled"}></td>
+        <td title="${esc(p.oldName)}">${esc(p.oldName)}</td>
+        <td class="arrow">&#8594;</td>
+        <td class="new-name" title="${esc(p.problem || p.note || p.newName)}">
+          ${p.problem ? `<span class="rename-problem">${esc(p.problem)}</span>` : esc(p.newName)}
+          ${episodes ? "" : `<button class="btn small secondary" data-identify="${esc(item.id)}">Identify…</button>`}
+          ${p.note ? `<span class="guess-badge ${item.guess?.confidence === "low" ? "low" : ""}" title="${esc(p.note)}">guessed</span>` : ""}
+        </td>
+      </tr>`;
+  };
+  const rows = episodes && !single && d?.status === "resolved"
+    ? group.blocks.map((block) => `
+        <tr class="block-row"><td colspan="4"><div class="block-line">${blockLineHtml(group, block)}</div></td></tr>
+        ${block.items.map(rowHtml).join("")}`).join("")
+    : group.items.map(rowHtml).join("");
+
   return `
-    <div class="card rename-group" data-title="${group.key === "movies" ? "" : esc(title)}">
+    <div class="card rename-group" data-item="${episodes ? esc(first.id) : ""}">
       ${head}
       <table class="rename-table">
         <thead><tr><th class="col-check"></th><th>Current name</th><th class="arrow"></th><th>New name</th></tr></thead>
-        <tbody>
-          ${group.items.map((item) => {
-            const p = byItem[item.id];
-            if (!p) return "";
-            return `
-              <tr class="${p.problem ? "problem" : ""}">
-                <td class="col-check"><input type="checkbox" data-check="${esc(p.itemId)}"
-                  ${state.proposalChecks[p.itemId] && p.canApply ? "checked" : ""} ${p.canApply ? "" : "disabled"}></td>
-                <td title="${esc(p.oldName)}">${esc(p.oldName)}</td>
-                <td class="arrow">&#8594;</td>
-                <td class="new-name" title="${esc(p.problem || p.note || p.newName)}">
-                  ${p.problem ? `<span class="rename-problem">${esc(p.problem)}</span>` : esc(p.newName)}
-                  ${group.key === "movies" ? `<button class="btn small secondary" data-identify="${esc(item.id)}">Identify…</button>` : ""}
-                  ${p.note ? `<span class="guess-badge ${item.guess?.confidence === "low" ? "low" : ""}" title="${esc(p.note)}">guessed</span>` : ""}
-                </td>
-              </tr>`;
-          }).join("")}
-        </tbody>
+        <tbody>${rows}</tbody>
       </table>
     </div>`;
 }

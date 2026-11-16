@@ -147,7 +147,18 @@ const files = [
 ];
 
 /** What GET /api/library returns (the internal `show` link is dropped). */
-export const library = files.map(({ show, ...item }) => item);
+// The group each file is shown in, as the backend's MediaGrouper would place it.
+function groupOf(item) {
+  const base = { block: null, folder: "Series" };
+  if (!item.parsed.isEpisode) return { ...base, key: "other", kind: "other", name: "Other files" };
+  const show = item.detection?.show;
+  const block = `${item.parsed.title}|${item.parsed.season ?? "bare"}`.toLowerCase();
+  return show
+    ? { ...base, key: `show:${show.source}:${show.id}`, kind: "show", name: show.name, block }
+    : { ...base, key: `title:${item.parsed.title.toLowerCase()}`, kind: "title", name: item.parsed.title, block };
+}
+
+export const library = files.map(({ show, ...item }) => ({ ...item, group: groupOf(item) }));
 
 const byName = (part) => files.find((f) => f.fileName.includes(part)).id;
 

@@ -29,7 +29,7 @@ public static class Endpoints
         api.MapGet("/library", (LibraryService library, SettingsService settings) =>
         {
             library.RefreshSubtitleStatus(settings.Current.Languages);
-            return Results.Ok(library.GetAll().Select(ToDto));
+            return Results.Ok(ToDtos(library));
         });
 
         api.MapPost("/library/add", (
@@ -40,7 +40,7 @@ public static class Endpoints
             library.RefreshSubtitleStatus(settings.Current.Languages);
             events.Publish("library-changed");
             detection.Queue(added);
-            return Results.Ok(new { added = added.Count, items = library.GetAll().Select(ToDto) });
+            return Results.Ok(new { added = added.Count, items = ToDtos(library) });
         });
 
         api.MapPost("/library/browse", async (
@@ -76,7 +76,7 @@ public static class Endpoints
                 events.Publish("library-changed");
                 detection.Queue(addedItems);
             }
-            return Results.Ok(new { added = addedItems.Count, items = library.GetAll().Select(ToDto) });
+            return Results.Ok(new { added = addedItems.Count, items = ToDtos(library) });
         });
 
         // ---- Detection (which show / which season a file is) -----------------
@@ -98,7 +98,7 @@ public static class Endpoints
                 .Where(i => string.Equals(i.Parsed.Title.Trim(), request.Title.Trim(), StringComparison.OrdinalIgnoreCase))
                 .ToList();
             await detection.RunAsync(affected, ct);
-            return Results.Ok(affected.Select(ToDto));
+            return Results.Ok(ToDtos(library, affected));
         });
 
         // The user said what one file is (show + season + episode) — for names that say nothing,
@@ -131,7 +131,7 @@ public static class Endpoints
             }
             await detection.RunAsync([item], ct);
             events.Publish("library-changed");
-            return Results.Ok(ToDto(item));
+            return Results.Ok(ToDtos(library, [item]).First());
         });
 
         // The user set the season for files whose names carry only an episode number.
@@ -142,7 +142,7 @@ public static class Endpoints
             foreach (var item in items)
                 item.SeasonOverride = request.Season is > 0 ? request.Season : null;
             await detection.RunAsync(items, ct);
-            return Results.Ok(items.Select(ToDto));
+            return Results.Ok(ToDtos(library, items));
         });
 
         api.MapDelete("/library/{id}", (string id, LibraryService library, EventBus events) =>
@@ -444,9 +444,36 @@ public static class Endpoints
         });
     }
 
-    private static object ToDto(MediaItem item) => new
+    /// <summary>Items as the UI sees them, each with the group (show / movie series) it belongs to.</summary>
+    private static IEnumerable<object> ToDtos(LibraryService library, IReadOnlyList<MediaItem>? subset = null)
+    {
+        var all = library.GetAll();
+        var places = new Dictionary<string, (MediaGroup Group, string? Block)>();
+        foreach (var group in MediaGrouper.Group(all))
+        {
+            foreach (var item in group.Items)
+                places[item.Id] = (group, null);
+            foreach (var block in group.Blocks)
+                foreach (var item in block.Items)
+                    places[item.Id] = (group, block.Key);
+        }
+        // Grouped order: the files of a show sit together, whatever order they were added in.
+        var ordered = subset ?? places.Values.Select(p => p.Group).Distinct()
+            .SelectMany(g => g.Blocks.Count > 0 ? g.Blocks.SelectMany(b => b.Items) : g.Items).ToList();
+        return ordered.Select(i => ToDto(i, places[i.Id].Group, places[i.Id].Block)).ToList();
+    }
+
+    private static object ToDto(MediaItem item, MediaGroup group, string? block) => new
     {
         id = item.Id,
+        group = new
+        {
+            key = group.Key,
+            kind = char.ToLowerInvariant(group.Kind.ToString()[0]) + group.Kind.ToString()[1..],
+            name = group.Name,
+            block,
+            folder = Path.GetFileName(Path.GetDirectoryName(item.Path) ?? ""),
+        },
         fileName = item.FileName,
         path = item.Path,
         sizeBytes = item.SizeBytes,

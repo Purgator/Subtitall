@@ -206,7 +206,7 @@ try {
     scenario = shot.scenario ?? "idle";
     await page.send("Emulation.setDeviceMetricsOverride", { ...shot.size, deviceScaleFactor: 1, mobile: false });
     await page.send("Page.navigate", { url: `${origin}/` });
-    await page.waitFor(`document.querySelectorAll(".file-table tbody tr").length === ${demo.library.length}`, "the file list");
+    await page.waitFor(`document.querySelectorAll(".file-table tbody tr[data-row]").length === ${demo.library.length}`, "the file list");
     if (shot.tab) await page.evaluate(`document.querySelector('.tab[data-view="${shot.tab}"]').click()`);
     await page.waitFor(shot.act ? "true" : shot.ready, shot.file);
     if (shot.act) await page.evaluate(shot.act);
