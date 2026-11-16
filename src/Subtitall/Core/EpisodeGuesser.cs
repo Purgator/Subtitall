@@ -66,7 +66,12 @@ public static class EpisodeGuesser
     {
         var p = input.Parsed;
         if (p.Season is int season && p.Episode is int episode)
+        {
+            if (p.Special)
+                return new EpisodeGuess(season, episode, p.EndEpisode, GuessConfidence.Low,
+                    $"Numbered as OVA/special {episode} — assuming special episode {episode}; identify the file if this is wrong");
             return new EpisodeGuess(season, episode, p.EndEpisode, GuessConfidence.Explicit, "Season and episode are in the filename");
+        }
 
         if (p.AbsoluteEpisode is not int number)
             return null;

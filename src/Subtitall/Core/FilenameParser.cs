@@ -20,6 +20,10 @@ public static partial class FilenameParser
     [GeneratedRegex(@"(?<![A-Za-z])Season[ ._\-]*(?<s>\d{1,2})[ ._\-]*(?:Episode|Ep)[ ._\-]*(?<e>\d{1,3})", RegexOptions.IgnoreCase)]
     private static partial Regex VerboseSeasonEpisodeRegex();
 
+    // "Show OVA 2", "Show_OAV_02v2", "Show - Special 3", "Show SP1" — numbered specials.
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(?:(?:OVA|OAV|OAD|Specials?)[ ._\-]*|SP)(?<e>\d{1,3})(?:v\d)?(?![0-9A-Za-z])", RegexOptions.IgnoreCase)]
+    private static partial Regex SpecialEpisodeRegex();
+
     // "Show - 12", "Show - 12v2", "Show - 12 BD 1080p" — anime absolute numbering (or a bare
     // in-season number: the season is guessed later). "Show - 12.5" (specials) is skipped by
     // the lookahead, and "Show - 1080p" too since the digits must end at a separator.
@@ -85,6 +89,7 @@ public static partial class FilenameParser
         }
 
         int? season = null, episode = null, endEpisode = null, absoluteEpisode = null;
+        var special = false;
         var titleEnd = name.Length;
 
         var m = SeasonEpisodeRegex().Match(name);
@@ -107,6 +112,13 @@ public static partial class FilenameParser
         {
             season = int.Parse(m.Groups["s"].Value);
             episode = int.Parse(m.Groups["e"].Value);
+            titleEnd = m.Index;
+        }
+        else if ((m = SpecialEpisodeRegex().Match(name)).Success)
+        {
+            season = 0;
+            episode = int.Parse(m.Groups["e"].Value);
+            special = true;
             titleEnd = m.Index;
         }
         else if ((m = AbsoluteEpisodeRegex().Match(name)).Success && !IsYearLike(m.Groups["e"].Value))
@@ -171,6 +183,7 @@ public static partial class FilenameParser
             AbsoluteEpisode = absoluteEpisode,
             SeasonHint = seasonHint,
             FinalSeasonHint = finalSeasonHint,
+            Special = special,
             Year = year,
             ReleaseGroup = releaseGroup,
         };

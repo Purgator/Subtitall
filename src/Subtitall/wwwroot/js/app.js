@@ -356,12 +356,12 @@ function renderFileRowHtml(item) {
     return `<span class="lang-chip ${cls}" data-item="${item.id}" data-lang="${esc(lang)}" title="${esc(title)}">${esc(lang)}</span>`;
   }).join("");
 
-  const isEpisode = !!item.parsed?.isEpisode;
+  const detectTitle = item.parsed?.isEpisode ? "Click to change the show, season or episode" : "Click to say which show and episode this is";
   return `
     <tr data-row="${item.id}">
       <td class="col-langs">${chips}</td>
       <td title="${esc(item.path)}">${esc(item.fileName)}</td>
-      <td class="col-parsed ${isEpisode ? "det-cell" : ""}" ${isEpisode ? `data-detect="${item.id}" title="Click to change the show or season"` : ""}>
+      <td class="col-parsed det-cell" data-detect="${item.id}" title="${detectTitle}">
         <span class="parsed-tag">${detectionHtml(item)}</span></td>
       <td class="col-size">${formatSize(item.sizeBytes)}</td>
       <td class="col-actions">
@@ -514,7 +514,11 @@ function detectionHtml(item) {
   const p = item.parsed || {};
   const d = item.detection;
   const tag = episodeTag(item);
-  if (!p.isEpisode) return `${esc(p.title || "")} ${tag ? `<span class="ep">${esc(tag)}</span>` : ""}`;
+  if (!p.isEpisode) {
+    return item.unidentified
+      ? `<span class="det-warn">not recognised — click to pick the show</span>`
+      : `${esc(p.title || "")} ${tag ? `<span class="ep">${esc(tag)}</span>` : ""} ${nameSourceBadge(item)}`;
+  }
 
   let name = esc(p.title || "");
   let extra = "";
@@ -529,7 +533,26 @@ function detectionHtml(item) {
   else if (d && d.status === "resolved" && !item.guess && p.absoluteEpisode != null)
     badge = `<span class="guess-badge low" title="Episode ${p.absoluteEpisode} doesn't fit any season — click to pick the season">no season</span>`;
 
-  return `${name} <span class="ep">${esc(tag)}</span> ${badge} ${extra}`;
+  return `${name} <span class="ep">${esc(tag)}</span> ${badge} ${nameSourceBadge(item)} ${extra}`;
+}
+
+// How a file was identified when its filename was not what told us.
+const NAME_SOURCES = {
+  decodedFileName: ["decoded name", "The filename is Base64 — it was decoded to"],
+  embeddedTitle: ["embedded title", "The filename says nothing usable — the title stored inside the video file was used"],
+  fileHash: ["file hash", "The filename says nothing usable — the file was recognised by its hash (size + checksum) on OpenSubtitles"],
+  user: ["set by you", "You said which show and episode this file is"],
+};
+
+function nameSourceText(item) {
+  const entry = NAME_SOURCES[item.nameSource];
+  if (!entry) return "";
+  return entry[1] + (item.sourceName ? `: ${item.sourceName}` : "");
+}
+
+function nameSourceBadge(item) {
+  const entry = NAME_SOURCES[item.nameSource];
+  return entry ? `<span class="guess-badge source" title="${esc(nameSourceText(item))}">${entry[0]}</span>` : "";
 }
 
 function groupKeyOf(item) {
@@ -617,7 +640,8 @@ let detectionModalToken = 0;
 
 function openDetectionModal(itemId) {
   const item = state.items.find((i) => i.id === itemId);
-  if (!item || !item.parsed?.isEpisode) return;
+  if (!item) return;
+  if (!item.parsed?.isEpisode) { openIdentifyModal(itemId); return; }
   const title = item.parsed.title;
   const token = ++detectionModalToken;
   const root = document.getElementById("modal-root");
@@ -655,16 +679,209 @@ function openDetectionModal(itemId) {
             </div>
             <div class="detect-section">
               <div class="detect-label">Files</div>
-              ${group.map((i) => `<div class="detect-file"><span class="ep">${esc(episodeTag(i))}</span> ${esc(i.fileName)}${i.guess && i.guess.confidence !== "explicit" ? ` <span class="hint-text">— ${esc(i.guess.reason)}</span>` : ""}</div>`).join("")}
+              <div class="hint-text" style="margin-bottom:6px">Wrong show or episode for one file only? Use <i>Identify</i> on its line.</div>
+              ${group.map((i) => `<div class="detect-file"><button class="btn small secondary" data-identify="${esc(i.id)}">Identify…</button> <span class="ep">${esc(episodeTag(i))}</span> ${esc(i.fileName)}${i.guess && i.guess.confidence !== "explicit" ? ` <span class="hint-text">— ${esc(i.guess.reason)}</span>` : ""}</div>`).join("")}
             </div>
           </div>
         </div>
       </div>`;
     root.querySelector("#modal-close").onclick = close;
     root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
+    root.querySelectorAll("[data-identify]").forEach((btn) => { btn.onclick = () => openIdentifyModal(btn.dataset.identify); });
     bindShowPicker(root, title, draw);
   };
   draw();
+}
+
+// ---------- Identify one file (show + season + episode, picked by hand) --------------------------
+
+function seasonLabel(season) {
+  return season === 0 ? "Specials" : `Season ${season}`;
+}
+
+function openIdentifyModal(itemId) {
+  const item = state.items.find((i) => i.id === itemId);
+  if (!item) return;
+  const token = ++detectionModalToken;
+  const root = document.getElementById("modal-root");
+  const alive = () => token === detectionModalToken;
+  const close = () => { detectionModalToken++; root.innerHTML = ""; };
+
+  const d = item.detection;
+  const picked = {
+    show: d?.show || null,
+    episodes: null, // null = not loaded, [] = the sources list none
+    season: item.effective?.season ?? null,
+    episode: item.effective?.episode ?? null,
+    saving: false,
+  };
+  const suggestions = d && d.status !== "resolved" ? d.candidates || [] : [];
+  const source = nameSourceText(item);
+
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal">
+        <div class="modal-head">
+          <span class="title" title="${esc(item.fileName)}">Identify “${esc(item.fileName)}”</span>
+          <button class="icon-btn" id="modal-close" title="Close">&#10005;</button>
+        </div>
+        <div class="modal-body detect-body">
+          ${source ? `<div class="hint-text identify-source">${esc(source)}</div>` : ""}
+          <div class="detect-section">
+            <div class="detect-label">Show</div>
+            <div class="identify-show"></div>
+            <input class="input show-search" placeholder="Type the show's name…" style="margin-top:8px" autocomplete="off">
+            <div class="show-search-results">${suggestions.map((s) => showResultHtml(s, false)).join("")}</div>
+          </div>
+          <div class="detect-section">
+            <div class="detect-label">Episode</div>
+            <div class="identify-episode"></div>
+          </div>
+          <div class="identify-actions">
+            ${item.nameSource === "user" ? `<button class="btn secondary" id="identify-reset" title="Forget your choice and detect this file automatically again">Back to automatic</button>` : ""}
+            <div class="grow"></div>
+            <button class="btn secondary" id="identify-cancel">Cancel</button>
+            <button class="btn" id="identify-apply" disabled>Use this episode</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  const showBox = root.querySelector(".identify-show");
+  const episodeBox = root.querySelector(".identify-episode");
+  const results = root.querySelector(".show-search-results");
+  const input = root.querySelector(".show-search");
+  const applyBtn = root.querySelector("#identify-apply");
+
+  const refreshApply = () => {
+    applyBtn.disabled = picked.saving || !picked.show || picked.season == null || !(picked.episode >= 1);
+    applyBtn.textContent = picked.saving ? "Saving…" : "Use this episode";
+  };
+
+  const drawShow = () => {
+    showBox.innerHTML = picked.show
+      ? showResultHtml(picked.show, true)
+      : `<div class="hint-text">Type a few letters of the show's name and pick it from the suggestions.</div>`;
+  };
+
+  const drawEpisode = () => {
+    if (!picked.show) {
+      episodeBox.innerHTML = `<div class="hint-text">Pick the show first.</div>`;
+    } else if (picked.episodes === null) {
+      episodeBox.innerHTML = `<div class="hint-text"><span class="spin"></span> Loading the episode list…</div>`;
+    } else if (!picked.episodes.length) {
+      // No episode list to choose from: plain numbers still let the search run.
+      episodeBox.innerHTML = `
+        <div class="hint-text" style="margin-bottom:6px">No episode list for this show — enter the numbers (season 0 = specials).</div>
+        <div class="identify-row">
+          <label>Season <input class="input" id="identify-season" type="number" min="0" value="${picked.season ?? 1}"></label>
+          <label>Episode <input class="input" id="identify-number" type="number" min="1" value="${picked.episode ?? ""}"></label>
+        </div>`;
+      const seasonInput = episodeBox.querySelector("#identify-season");
+      const numberInput = episodeBox.querySelector("#identify-number");
+      const read = () => {
+        picked.season = seasonInput.value === "" ? null : Number(seasonInput.value);
+        picked.episode = numberInput.value === "" ? null : Number(numberInput.value);
+        refreshApply();
+      };
+      seasonInput.oninput = read;
+      numberInput.oninput = read;
+      read();
+    } else {
+      // Specials (OVAs…) are always on offer, even when no source lists them by number.
+      const seasons = [...new Set([...picked.episodes.map((e) => e.season), 0])].sort((a, b) => (a === 0) - (b === 0) || a - b);
+      if (!seasons.includes(picked.season)) { picked.season = seasons[0]; picked.episode = null; }
+      const inSeason = picked.episodes.filter((e) => e.season === picked.season);
+      const listed = inSeason.length > 0;
+      if (listed && !inSeason.some((e) => e.number === picked.episode)) picked.episode = null;
+      episodeBox.innerHTML = `
+        <div class="identify-row">
+          <select class="input" id="identify-season">
+            ${seasons.map((s) => `<option value="${s}" ${s === picked.season ? "selected" : ""}>${seasonLabel(s)}</option>`).join("")}
+          </select>
+          ${listed ? `
+            <select class="input grow" id="identify-number">
+              <option value="">Which episode?</option>
+              ${inSeason.map((e) => `<option value="${e.number}" ${e.number === picked.episode ? "selected" : ""}>E${String(e.number).padStart(2, "0")}${e.name ? " — " + esc(e.name) : ""}</option>`).join("")}
+            </select>` : `
+            <label>Number <input class="input" id="identify-number" type="number" min="1" value="${picked.episode ?? ""}"></label>`}
+        </div>
+        ${listed ? "" : `<div class="hint-text" style="margin-top:6px">The specials of this show are not listed by number — enter the special's number. Add a TMDB key in Settings to pick them by title.</div>`}`;
+      episodeBox.querySelector("#identify-season").onchange = (e) => {
+        picked.season = Number(e.target.value);
+        picked.episode = null;
+        drawEpisode();
+      };
+      const numberField = episodeBox.querySelector("#identify-number");
+      numberField.onchange = numberField.oninput = () => {
+        picked.episode = numberField.value === "" ? null : Number(numberField.value);
+        refreshApply();
+      };
+    }
+    refreshApply();
+  };
+
+  const pickShow = async (show) => {
+    picked.show = show;
+    picked.episodes = null;
+    input.value = "";
+    results.innerHTML = "";
+    drawShow();
+    drawEpisode();
+    let episodes = [];
+    try { episodes = await post("/api/shows/episodes", show); } catch { /* numbers by hand then */ }
+    if (!alive() || !isSameShow(picked.show, show)) return;
+    picked.episodes = episodes;
+    drawEpisode();
+  };
+
+  const bindResults = () => {
+    results.querySelectorAll("[data-show]").forEach((el) => { el.onclick = () => pickShow(JSON.parse(el.dataset.show)); });
+  };
+
+  let searchToken = 0;
+  input.oninput = debounce(async () => {
+    const q = input.value.trim();
+    const mine = ++searchToken;
+    if (q.length < 2) { results.innerHTML = ""; return; }
+    let found = [];
+    try { found = await get(`/api/rename/shows?q=${encodeURIComponent(q)}`); } catch { /* ignore */ }
+    if (!alive() || mine !== searchToken) return;
+    results.innerHTML = found.length
+      ? found.slice(0, 8).map((s) => showResultHtml(s, false)).join("")
+      : `<div class="hint-text" style="padding:6px 2px">No show found for “${esc(q)}”.</div>`;
+    bindResults();
+  }, 300);
+
+  const save = async (body, done) => {
+    picked.saving = true;
+    refreshApply();
+    try {
+      await post("/api/library/identify", body);
+      await loadLibrary();
+      if (state.view === "rename") loadProposals();
+      close();
+      toast(done, "ok");
+    } catch (err) {
+      picked.saving = false;
+      refreshApply();
+      toast(`Could not identify the file: ${err.message}`, "err");
+    }
+  };
+
+  applyBtn.onclick = () => save(
+    { itemId, show: picked.show, season: picked.season, episode: picked.episode },
+    `${picked.show.name} ${picked.season === 0 ? "special" : "S" + String(picked.season).padStart(2, "0")} E${String(picked.episode).padStart(2, "0")} — set`);
+  const resetBtn = root.querySelector("#identify-reset");
+  if (resetBtn) resetBtn.onclick = () => save({ itemId, show: null }, "Back to automatic detection");
+  root.querySelector("#identify-cancel").onclick = close;
+  root.querySelector("#modal-close").onclick = close;
+  root.querySelector(".modal-backdrop").onclick = (e) => { if (e.target.classList.contains("modal-backdrop")) close(); };
+
+  bindResults();
+  drawShow();
+  if (picked.show) pickShow(picked.show); else drawEpisode();
+  input.focus();
 }
 
 // ---------- Rename view -------------------------------------------------------------------------
@@ -729,6 +946,7 @@ function renderRenameView(main) {
     const title = card.dataset.title;
     if (title) bindShowPicker(card, title, () => loadProposals());
     card.querySelectorAll("[data-change]").forEach((btn) => { btn.onclick = () => openDetectionModal(btn.dataset.change); });
+    card.querySelectorAll("[data-identify]").forEach((btn) => { btn.onclick = () => openIdentifyModal(btn.dataset.identify); });
   });
 
   main.querySelectorAll("[data-check]").forEach((box) => {
@@ -781,7 +999,7 @@ function renderRenameGroupHtml(group, byItem) {
   let head;
   if (group.key === "movies") {
     head = `<div class="panel-title">Not TV episodes</div>
-      <div class="hint-text" style="padding:0 14px 10px">Movies and files without an episode number are left alone.</div>`;
+      <div class="hint-text" style="padding:0 14px 10px">Movies and files without an episode number are left alone. If one of them is an episode, <i>Identify</i> it.</div>`;
   } else if (!d) {
     head = `<div class="panel-title">“${esc(title)}”</div>
       <div class="hint-text" style="padding:0 14px 10px"><span class="spin"></span> Detecting the show…</div>`;
@@ -829,6 +1047,7 @@ function renderRenameGroupHtml(group, byItem) {
                 <td class="arrow">&#8594;</td>
                 <td class="new-name" title="${esc(p.problem || p.note || p.newName)}">
                   ${p.problem ? `<span class="rename-problem">${esc(p.problem)}</span>` : esc(p.newName)}
+                  ${group.key === "movies" ? `<button class="btn small secondary" data-identify="${esc(item.id)}">Identify…</button>` : ""}
                   ${p.note ? `<span class="guess-badge ${item.guess?.confidence === "low" ? "low" : ""}" title="${esc(p.note)}">guessed</span>` : ""}
                 </td>
               </tr>`;

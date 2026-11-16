@@ -202,6 +202,7 @@ body {
   cursor: help;
 }
 .guess-badge.low { background: var(--err-bg); color: var(--err); }
+.guess-badge.source { background: var(--input); color: var(--dim); }
 
 .lang-chip {
   display: inline-block;
@@ -272,6 +273,15 @@ body {
 .detect-section + .detect-section { border-top: 1px solid var(--border); }
 .detect-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin-bottom: 8px; }
 .detect-section .season-select { width: auto; }
+.detect-file .btn { margin-right: 6px; }
+.identify-source { padding: 10px 0 2px; overflow-wrap: anywhere; }
+.identify-row { display: flex; gap: 8px; align-items: center; }
+.identify-row .input { width: auto; }
+.identify-row .input.grow { flex: 1; min-width: 0; }
+.identify-row label { display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 12.5px; }
+.identify-row input[type=number] { width: 80px; }
+.identify-actions .grow { flex: 1; }
+.identify-actions { display: flex; gap: 8px; align-items: center; padding-top: 12px; border-top: 1px solid var(--border); }
 .detect-file { font-size: 12.5px; padding: 3px 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .panel-title {

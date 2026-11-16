@@ -25,6 +25,12 @@ public sealed record ParsedMedia
     /// <summary>The title said "The Final Season" — i.e. the show's last season.</summary>
     public bool FinalSeasonHint { get; init; }
 
+    /// <summary>
+    /// The name numbers the file as an OVA/special ("OVA 2", "Special 3"): it is read as season 0,
+    /// which is where the metadata sources list specials — a guess worth showing as one.
+    /// </summary>
+    public bool Special { get; init; }
+
     public int? Year { get; init; }
 
     public string? ReleaseGroup { get; init; }

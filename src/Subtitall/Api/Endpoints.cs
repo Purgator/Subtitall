@@ -101,6 +101,39 @@ public static class Endpoints
             return Results.Ok(affected.Select(ToDto));
         });
 
+        // The user said what one file is (show + season + episode) — for names that say nothing,
+        // or say it wrong. Without a show, the file goes back to automatic detection.
+        api.MapPost("/library/identify", async (
+            IdentifyRequest request, LibraryService library, ShowDetectionService shows,
+            MediaDetectionService detection, EventBus events, CancellationToken ct) =>
+        {
+            var item = library.Get(request.ItemId ?? "");
+            if (item is null)
+                return Results.NotFound();
+
+            if (request.Show is null)
+            {
+                library.Reread(item);
+                item.Detection = null;
+            }
+            else
+            {
+                if (request.Season is not >= 0 || request.Episode is not >= 1)
+                    return Results.BadRequest(new { message = "A season and an episode are required" });
+                shows.Choose(request.Show.Name, request.Show);
+                library.Identify(item, new ParsedMedia
+                {
+                    Title = request.Show.Name,
+                    Season = request.Season,
+                    Episode = request.Episode,
+                    ReleaseGroup = item.Parsed.ReleaseGroup,
+                }, NameSource.User, null);
+            }
+            await detection.RunAsync([item], ct);
+            events.Publish("library-changed");
+            return Results.Ok(ToDto(item));
+        });
+
         // The user set the season for files whose names carry only an episode number.
         api.MapPost("/library/season", async (
             SetSeasonRequest request, LibraryService library, MediaDetectionService detection, CancellationToken ct) =>
@@ -179,6 +212,13 @@ public static class Endpoints
                 .OrderBy(s => s.show.Name)
                 .ToList();
             return Results.Ok(shows);
+        });
+
+        // Episode list of any show (specials included, as season 0) — feeds the episode picker.
+        api.MapPost("/shows/episodes", async (TvShow show, ShowDetectionService shows, CancellationToken ct) =>
+        {
+            var resolved = await shows.GetDetailsAsync(show, ct);
+            return Results.Ok(resolved.Episodes.OrderBy(e => e.Season).ThenBy(e => e.Number));
         });
 
         // Full picture of one show: metadata, trailer, every episode in viewing order with
@@ -336,7 +376,7 @@ public static class Endpoints
                 if (show is null)
                 {
                     proposals.AddRange(group.Select(i => new RenameProposal(i.Id, i.FileName, i.FileName,
-                        !i.Parsed.IsEpisode ? "Not a TV episode"
+                        !i.Parsed.IsEpisode ? (i.IsUnidentified ? "Not recognised — identify it" : "Not a TV episode")
                         : i.Detection is null ? "Show not detected yet"
                         : i.Detection.Status == DetectionStatus.Ambiguous ? "Several shows match — pick one"
                         : "Show not found — pick it")));
@@ -427,6 +467,10 @@ public static class Endpoints
         effective = new { season = item.Effective.Season, episode = item.Effective.Episode, endEpisode = item.Effective.EndEpisode },
         guess = item.Guess is { } g ? new { g.Season, g.Episode, confidence = g.Confidence.ToString().ToLowerInvariant(), g.Reason } : null,
         seasonOverride = item.SeasonOverride,
+        // Where the name came from when it isn't simply the filename, and whether anything usable was found.
+        nameSource = char.ToLowerInvariant(item.NameSource.ToString()[0]) + item.NameSource.ToString()[1..],
+        sourceName = item.SourceName,
+        unidentified = item.IsUnidentified,
         detection = item.Detection is { } d ? new
         {
             d.Title,
@@ -460,6 +504,7 @@ public static class Endpoints
     public sealed record DownloadRequest(string ItemId, SubtitleCandidate Candidate);
     public sealed record ProposalsRequest(List<string>? ItemIds);
     public sealed record ChooseShowRequest(string Title, TvShow? Show);
+    public sealed record IdentifyRequest(string? ItemId, TvShow? Show, int? Season, int? Episode);
     public sealed record SetSeasonRequest(List<string>? ItemIds, int? Season);
     public sealed record ApplyRenameRequest(List<RenameProposal>? Proposals);
 }

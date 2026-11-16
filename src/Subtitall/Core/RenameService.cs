@@ -33,7 +33,6 @@ public sealed class RenameService(LibraryService library)
             knownNames.AddRange(alternateNames);
 
         var bySeasonEpisode = episodes
-            .Where(e => e.Season > 0)
             .GroupBy(e => (e.Season, e.Number))
             .ToDictionary(g => g.Key, g => g.First());
 
@@ -86,7 +85,9 @@ public sealed class RenameService(LibraryService library)
 
             string? problem = null;
             if (episode is null)
-                problem = $"Episode S{season:00}E{number:00} not found on the metadata sources";
+                problem = season == 0 && !episodes.Any(e => e.Season == 0)
+                    ? $"Special {number} is not listed — specials are named from TMDB (add a key in Settings)"
+                    : $"Episode S{season:00}E{number:00} not found on the metadata sources";
             else
             {
                 var newPath = Path.Combine(Path.GetDirectoryName(item.Path) ?? "", newName);

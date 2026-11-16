@@ -9,8 +9,20 @@ public sealed class MediaItem
 
     public string FileName => System.IO.Path.GetFileName(Path);
 
-    /// <summary>What the filename alone says.</summary>
+    /// <summary>What the file was read as — from its name, or from <see cref="NameSource"/>.</summary>
     public required ParsedMedia Parsed { get; set; }
+
+    /// <summary>Where <see cref="Parsed"/> comes from (the filename unless that said nothing usable).</summary>
+    public NameSource NameSource { get; set; }
+
+    /// <summary>The text that was parsed when it is not the filename (decoded name, embedded title…).</summary>
+    public string? SourceName { get; set; }
+
+    /// <summary>The file's hash was already looked up (whatever the answer) — don't ask again.</summary>
+    public bool HashLookupDone { get; set; }
+
+    /// <summary>Nothing says what this file is yet: worth a hash lookup, and the user's attention.</summary>
+    public bool IsUnidentified => !MediaNameReader.IsUsable(Parsed);
 
     public long SizeBytes { get; init; }
 

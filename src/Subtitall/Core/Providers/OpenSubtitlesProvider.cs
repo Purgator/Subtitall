@@ -7,6 +7,9 @@ namespace Subtitall.Core.Providers;
 /// <summary>Outcome of the last OpenSubtitles login attempt, for the Settings page.</summary>
 public sealed record OpenSubtitlesLogin(bool Ok, string? User, int? AllowedDownloads, string? Error, DateTimeOffset At);
 
+/// <summary>What OpenSubtitles knows a file to be, from its hash alone.</summary>
+public sealed record HashIdentity(string Title, int? Year, int? Season, int? Episode);
+
 /// <summary>
 /// OpenSubtitles REST API (api.opensubtitles.com v1). Requires a per-app API key;
 /// an optional user login raises the download quota (anonymous: 5/day/IP).
@@ -104,6 +107,38 @@ public sealed class OpenSubtitlesProvider(
             });
         }
         return candidates;
+    }
+
+    /// <summary>
+    /// Asks which movie or episode a file is, by its hash only (file size + checksum of its first
+    /// and last 64 KiB) — the one lookup that works when the name says nothing. Null when the
+    /// hash is unknown to OpenSubtitles, which is common for re-encodes and rare releases.
+    /// </summary>
+    public async Task<HashIdentity?> IdentifyByHashAsync(string path, AppSettings settings, CancellationToken ct)
+    {
+        if (MovieHash.Compute(path) is not { } hash)
+            return null;
+        var response = await SendAsync(
+            HttpMethod.Get, $"{BaseUrl}/subtitles?moviehash={hash}", settings, jsonBody: null, withToken: false, ct);
+        return ParseIdentity(response);
+    }
+
+    /// <summary>The feature most hash-matched subtitles agree on (other results are not evidence).</summary>
+    internal static HashIdentity? ParseIdentity(string json)
+    {
+        var features = (TryDeserialize<SearchResponse>(json)?.Data ?? [])
+            .Select(e => e.Attributes)
+            .Where(a => a is { MoviehashMatch: true, FeatureDetails: not null })
+            .Select(a => a!.FeatureDetails!)
+            .Select(f => f.SeasonNumber is int season && f.EpisodeNumber is int episode && f.ParentTitle is { Length: > 0 } show
+                ? new HashIdentity(show.Trim(), null, season, episode)
+                : new HashIdentity((f.Title ?? f.MovieName ?? "").Trim(), f.Year, null, null))
+            .Where(i => i.Title.Length > 0)
+            .ToList();
+        return features
+            .GroupBy(i => i)
+            .OrderByDescending(g => g.Count())
+            .FirstOrDefault()?.Key;
     }
 
     public async Task<SubtitlePayload> DownloadAsync(
@@ -361,6 +396,17 @@ public sealed class OpenSubtitlesProvider(
         public bool? MoviehashMatch { get; set; }
         public bool? HearingImpaired { get; set; }
         public List<SubtitleFileDto>? Files { get; set; }
+        public FeatureDetailsDto? FeatureDetails { get; set; }
+    }
+
+    private sealed class FeatureDetailsDto
+    {
+        public string? Title { get; set; }
+        public string? MovieName { get; set; }
+        public int? Year { get; set; }
+        public int? SeasonNumber { get; set; }
+        public int? EpisodeNumber { get; set; }
+        public string? ParentTitle { get; set; }
     }
 
     private sealed class SubtitleFileDto

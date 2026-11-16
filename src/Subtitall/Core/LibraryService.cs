@@ -28,11 +28,14 @@ public sealed class LibraryService
                 if (IsSampleFile(fullPath, size))
                     continue;
 
+                var reading = MediaNameReader.Read(fullPath);
                 var item = new MediaItem
                 {
                     Id = (++_nextId).ToString(),
                     Path = fullPath,
-                    Parsed = FilenameParser.Parse(fullPath),
+                    Parsed = reading.Parsed,
+                    NameSource = reading.Source,
+                    SourceName = reading.Name,
                     SizeBytes = size,
                 };
                 _byPath[fullPath] = item;
@@ -82,11 +85,32 @@ public sealed class LibraryService
         {
             _byPath.Remove(item.Path);
             item.Path = Path.GetFullPath(newPath);
-            item.Parsed = FilenameParser.Parse(item.Path);
-            // The new name is parsed afresh; detection re-runs for it (see MediaDetectionService).
-            item.Guess = null;
             _byPath[item.Path] = item;
         }
+        // The new name is read afresh; detection re-runs for it (see MediaDetectionService).
+        Reread(item);
+    }
+
+    /// <summary>Reads the file again from scratch, dropping what the user or a lookup said it was.</summary>
+    public void Reread(MediaItem item)
+    {
+        var reading = MediaNameReader.Read(item.Path);
+        item.Parsed = reading.Parsed;
+        item.NameSource = reading.Source;
+        item.SourceName = reading.Name;
+        item.HashLookupDone = false;
+        item.Guess = null;
+    }
+
+    /// <summary>Records what a file is when that came from somewhere else than its name.</summary>
+    public void Identify(MediaItem item, ParsedMedia parsed, NameSource source, string? sourceName)
+    {
+        item.Parsed = parsed;
+        item.NameSource = source;
+        item.SourceName = sourceName;
+        item.Guess = null;
+        item.Detection = null;
+        item.SeasonOverride = null;
     }
 
     /// <summary>Re-checks which subtitle files exist on disk for the given languages.</summary>

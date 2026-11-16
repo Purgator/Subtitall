@@ -28,6 +28,23 @@ public sealed class ShowMetadataService(
     public async Task<IReadOnlyList<TvEpisode>> GetEpisodesAsync(
         string source, int showId, string showName, CancellationToken ct = default)
     {
+        var episodes = await GetRegularEpisodesAsync(source, showId, showName, ct);
+        if (!tmdb.IsConfigured || episodes.Any(e => e.Season == 0))
+            return episodes;
+
+        // Specials (OVAs…) only exist as numbered episodes on TMDB, under season 0.
+        var tmdbId = source == TmdbService.SourceName
+            ? showId
+            : (await FindOnOtherSourceAsync(source, showName, ct))?.Id;
+        if (tmdbId is not int id)
+            return episodes;
+        var specials = await Guarded(() => tmdb.GetSpecialsAsync(id, ct), TmdbService.SourceName);
+        return specials.Count == 0 ? episodes : [.. episodes, .. specials];
+    }
+
+    private async Task<IReadOnlyList<TvEpisode>> GetRegularEpisodesAsync(
+        string source, int showId, string showName, CancellationToken ct)
+    {
         var episodes = await Guarded(
             () => source == TmdbService.SourceName ? tmdb.GetEpisodesAsync(showId, ct) : tvmaze.GetEpisodesAsync(showId, ct),
             source);

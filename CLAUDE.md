@@ -53,7 +53,9 @@ Packaging facts (verified 2026-10; do not "fix" these):
 ## Architecture map
 
 - `src/Subtitall/Core/` — pure logic, no HTTP endpoints:
-  - `FilenameParser` (scene/anime name parsing, season hints in titles), `EpisodeGuesser`
+  - `FilenameParser` (scene/anime name parsing, season hints in titles, "OVA 2" → season 0),
+    `MediaNameReader` (what a file is, read locally: filename → Base64-decoded filename →
+    `MatroskaTitle`, the title stored in an MKV; `MediaItem.NameSource` says which), `EpisodeGuesser`
     (season for files that only carry an episode number — pure, group-aware),
     `ShowDetectionService` (filename title → show, with aliases + episode list; asks via
     `Ambiguous` when several match; remembers user picks), `LibraryService` (linked videos),
@@ -69,7 +71,8 @@ Packaging facts (verified 2026-10; do not "fix" these):
 - `src/Subtitall/Api/` — minimal-API endpoints (`Endpoints.cs`), `EventBus` (SSE broadcast),
   `BatchSearchService` (one batch search at a time, progress events), `MediaDetectionService`
   (runs show detection + season guessing per title group after files are added, and before any
-  search or rename; sets `MediaItem.Detection`/`Guess`; providers read `MediaItem.Effective`),
+  search or rename; sets `MediaItem.Detection`/`Guess`; providers read `MediaItem.Effective`;
+  files with an unusable name are first looked up by hash on OpenSubtitles),
   `UpdateService` (electron-updater events → `update-status` SSE + check/install endpoints).
 - **Search feedback is part of the contract**: `SubtitleSearchService` returns a `SearchReport`
   with one `SourceOutcome` per provider (off / notApplicable / coolingDown / nothing / found /
@@ -89,6 +92,9 @@ Packaging facts (verified 2026-10; do not "fix" these):
   `file_id` for downloads comes from `attributes.files[].file_id`; an expired JWT surfaces as
   HTTP **500** with "invalid" (re-login then retry); User-Agent must be `Subtitall vX.Y.Z`;
   anonymous downloads are capped at ~5/day/IP — username/password raises the quota.
+  `GET /subtitles?moviehash=…` alone identifies a file: entries with `moviehash_match: true`
+  carry `feature_details` (`title`, `year`, and for episodes `parent_title`, `season_number`,
+  `episode_number`) — per the API docs, not yet exercised against the live API.
 - **SubDL**: uppercase language codes (`EN`, `BR_PT`, `ZH_BG`); downloads are ZIPs (sniff `PK`
   magic) except season-pack `unpack_files` URLs which are raw files; needs a browser-ish User-Agent.
 - **Gestdown**: HTTP 423 = show being indexed, retry later; 2-letter language codes only
@@ -114,6 +120,12 @@ Packaging facts (verified 2026-10; do not "fix" these):
 - **Anime aliasing**: `MediaItem.AlternateTitles` comes from the detected show (name + akas);
   Gestdown and SubSource retry their show lookup with those names since they mostly index
   English titles. Rename proposals match files against the show name + akas + acronyms.
+- **Specials are season 0**, and only TMDB numbers them (`/tv/{id}/season/0`, 404 when a show
+  has none); `ShowMetadataService.GetEpisodesAsync` appends them to the episode list whatever
+  the show's source. Everything that counts seasons filters `Season > 0`.
+- **A file identified by hand** (`POST /api/library/identify`) gets a fresh `Parsed` (show name +
+  season + episode, `NameSource.User`) and the show is pinned for that name — it then flows
+  through the normal detection like any well-named file. A rename re-reads the new filename.
 - **Show detection and season guessing are shared**: the Rename tab and the subtitle search must
   never detect a show two different ways — both go through `ShowDetectionService` +
   `EpisodeGuesser` (via `MediaDetectionService`). When in doubt, ask the user (candidate list),

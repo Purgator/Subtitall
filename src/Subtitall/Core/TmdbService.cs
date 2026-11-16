@@ -85,6 +85,23 @@ public sealed class TmdbService(IHttpClientFactory httpFactory, SettingsService 
         return episodes;
     }
 
+    /// <summary>The show's specials (OVAs, recaps…), which TMDB files under season 0; empty when it has none.</summary>
+    public async Task<IReadOnlyList<TvEpisode>> GetSpecialsAsync(int showId, CancellationToken ct = default)
+    {
+        try
+        {
+            var dto = await GetAsync<SeasonDto>($"/tv/{showId}/season/0", ct);
+            return (dto?.Episodes ?? [])
+                .Where(e => e.EpisodeNumber.HasValue)
+                .Select(e => new TvEpisode(0, e.EpisodeNumber!.Value, e.Name ?? "", e.AirDate))
+                .ToList();
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return [];
+        }
+    }
+
     public async Task<IReadOnlyList<string>> GetAliasesAsync(int showId, CancellationToken ct = default)
     {
         var result = await GetAsync<AlternativeTitlesDto>($"/tv/{showId}/alternative_titles", ct);
