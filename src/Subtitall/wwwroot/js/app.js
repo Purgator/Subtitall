@@ -136,6 +136,12 @@ function connectEvents() {
         loadLibraryDebounced();
       }
     } catch { /* backend not ready yet */ }
+    // Same for the update check: its answer may have gone out before this stream was open,
+    // which would leave "Checking for updates…" spinning although the check is long over.
+    try {
+      state.update = await get("/api/update/status");
+      renderUpdateStatus();
+    } catch { /* backend not ready yet */ }
   };
   source.onmessage = (event) => {
     const { type, data } = JSON.parse(event.data);

@@ -16,8 +16,13 @@ public sealed record UpdateStatus(string State, string? Version, double? Percent
 /// </summary>
 public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger)
 {
+    /// <summary>How long a check may stay without an answer before the UI is told so.</summary>
+    private static readonly TimeSpan CheckTimeout = TimeSpan.FromSeconds(30);
+
     private readonly Lock _lock = new();
     private bool _wired;
+    private int _check; // Which check is running — an old watchdog must not judge a newer check.
+    private bool _updaterAnswered; // electron-updater said "checking" for the running check.
     private UpdateStatus _status = UpdateStatus.Idle("Not checked yet");
 
     public UpdateStatus Status
@@ -41,8 +46,7 @@ public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger
         }
         try
         {
-            Electron.AutoUpdater.OnCheckingForUpdate += () =>
-                Set(new UpdateStatus("checking", null, null, "Checking for updates…", DateTimeOffset.UtcNow));
+            Electron.AutoUpdater.OnCheckingForUpdate += MarkUpdaterStarted;
             Electron.AutoUpdater.OnUpdateNotAvailable += info =>
                 Set(new UpdateStatus("upToDate", info?.Version, null, $"You're on the latest version (v{UserAgent.Version})", DateTimeOffset.UtcNow));
             Electron.AutoUpdater.OnUpdateAvailable += info =>
@@ -72,23 +76,27 @@ public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger
         Wire();
         if (Status.State is "unsupported" or "checking" or "downloading")
             return;
-        var started = DateTimeOffset.UtcNow;
-        Set(new UpdateStatus("checking", null, null, "Checking for updates…", started));
+        var check = BeginCheck();
 
-        // In an unpackaged dev run electron-updater silently no-ops (the call may not even
-        // return): say so instead of spinning forever.
+        // A check that never answers must not spin forever: in an unpackaged dev run
+        // electron-updater silently no-ops (the call may not even return), and in the
+        // installed app a request can hang or an event can get lost on the way.
         _ = Task.Run(async () =>
         {
-            await Task.Delay(TimeSpan.FromSeconds(20));
-            if (Status is { State: "checking", At: var at } && at == started)
-                Set(new UpdateStatus("unsupported", null, null, "Update check didn't answer — updates only work in the installed app", DateTimeOffset.UtcNow));
+            await Task.Delay(CheckTimeout);
+            ExpireCheck(check);
         });
 
         try
         {
             // Downloads in the background and installs when the app quits
             // (autoInstallOnAppQuit is electron-updater's default).
-            await Electron.AutoUpdater.CheckForUpdatesAndNotifyAsync();
+            var result = await Electron.AutoUpdater.CheckForUpdatesAndNotifyAsync();
+
+            // The outcome normally arrives through the events. If the call is back and none
+            // did, its own result still says whether there is something newer.
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            CompleteCheck(check, result?.UpdateInfo?.Version);
         }
         catch (Exception ex)
         {
@@ -96,6 +104,55 @@ public sealed class UpdateService(EventBus events, ILogger<UpdateService> logger
             logger.LogWarning(ex, "Update check failed");
             Set(new UpdateStatus("error", null, null, Friendly(ex.Message), DateTimeOffset.UtcNow));
         }
+    }
+
+    /// <summary>Starts a check: the status says "checking" until an answer or the timeout.</summary>
+    internal int BeginCheck()
+    {
+        int check;
+        lock (_lock)
+        {
+            check = ++_check;
+            _updaterAnswered = false;
+        }
+        Set(new UpdateStatus("checking", null, null, "Checking for updates…", DateTimeOffset.UtcNow));
+        return check;
+    }
+
+    /// <summary>electron-updater picked the check up — so updates do work in this build.</summary>
+    internal void MarkUpdaterStarted()
+    {
+        lock (_lock) _updaterAnswered = true;
+    }
+
+    /// <summary>
+    /// The check call returned: if no event settled the status meanwhile, settle it from the
+    /// version the call reported (the same version as ours means there is nothing newer).
+    /// </summary>
+    internal void CompleteCheck(int check, string? latestVersion)
+    {
+        if (!IsStillChecking(check) || latestVersion is null)
+            return;
+        if (latestVersion.TrimStart('v') == UserAgent.Version)
+            Set(new UpdateStatus("upToDate", latestVersion, null, $"You're on the latest version (v{UserAgent.Version})", DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>Ends a check that got no answer in time, saying why instead of spinning on.</summary>
+    internal void ExpireCheck(int check)
+    {
+        if (!IsStillChecking(check))
+            return;
+        bool answered;
+        lock (_lock) answered = _updaterAnswered;
+        logger.LogWarning("Update check {Check} got no answer (updater started: {Started})", check, answered);
+        Set(answered
+            ? new UpdateStatus("error", null, null, "The update check got no answer — try again later", DateTimeOffset.UtcNow)
+            : new UpdateStatus("unsupported", null, null, "Update check didn't answer — updates only work in the installed app", DateTimeOffset.UtcNow));
+    }
+
+    private bool IsStillChecking(int check)
+    {
+        lock (_lock) return _check == check && _status.State == "checking";
     }
 
     /// <summary>Quits and installs the downloaded update.</summary>
