@@ -151,7 +151,10 @@ function connectEvents() {
         // The settings form saves itself and must not be rebuilt under the user's cursor.
         if (type === "settings-changed") get("/api/settings").then((s) => { state.settings = s; if (state.view !== "settings") render(); });
         loadLibraryDebounced();
-        if (state.view === "rename" && state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
+        // Proposals follow the library: refresh them when they are on screen, and forget them
+        // otherwise so the Rename tab never opens on names computed for an older file list.
+        if (state.view !== "rename") state.proposals = null;
+        else if (state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
         if (state.shows !== null) { state.showDetails = null; loadShowsDebounced(); }
         break;
       case "batch-started":
