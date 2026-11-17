@@ -27,6 +27,8 @@ builder.Services.AddSingleton<RenameService>();
 builder.Services.AddSingleton<EventBus>();
 builder.Services.AddSingleton<BatchSearchService>();
 builder.Services.AddSingleton<UpdateService>();
+builder.Services.AddSingleton<FfmpegService>();
+builder.Services.AddSingleton<ReencodeService>();
 
 builder.UseElectron(args, OnElectronAppReady);
 
@@ -35,6 +37,7 @@ var app = builder.Build();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapSubtitallApi();
+app.MapReencodeApi();
 
 app.Run();
 

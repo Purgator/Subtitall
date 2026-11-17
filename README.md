@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/Purgator/Subtitall)](https://github.com/Purgator/Subtitall/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming.
+Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming and a re-encoder that shrinks your videos without visible loss.
 
 ![The Files tab during a search: one language chip per subtitle, green when saved, red when nothing was found, with the detected show and episode next to each file](docs/files.png)
 
@@ -17,6 +17,10 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 | Rename episodes from the show's episode list. When a name is ambiguous, the app asks instead of guessing. | Read about each show and see which aired episodes you still have no file for. |
 | ![The subtitle picker opened from a language chip: what each source found, then the ranked subtitles with an exact-match badge and a Download button](docs/pick-subtitle.png) | ![The Settings tab: Gestdown and OpenSubtitles enabled with their status, SubDL and SubSource off](docs/settings.png) |
 | Click a chip to see what every source answered and pick a subtitle yourself. | Turn sources on or off; each one says whether it is ready and how many downloads are left. |
+
+![The Re-encode tab: files grouped by show with their video format, two episodes already re-encoded with their old and new size, the space saved and a quality label, a third one in progress](docs/reencode.png)
+
+Shrink a whole season in a few clicks: the old and new size of each file, the space saved, and nothing deleted until you say so.
 
 - 🎬 **Link videos your way** — drag & drop files or folders anywhere in the window, or use the Add buttons. Folders are scanned recursively.
 - 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / `E02` / anime absolute numbering, year and release group are detected automatically, including season markers written into the title (`Show The Final Season - 15`, `Show Season 3 - 05`, `Show 2nd Season - 07`) and numbered specials (`Show OVA 2`, `Show - Special 3` → season 0).
@@ -36,6 +40,11 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 - ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, each group with its own *Change show…* button and a season picker per season of files, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 📺 **Shows tab** — every show your files were matched to, with its poster, summary, genres, status, network, rating, official site and trailer (trailers come from TMDB), the full episode list in viewing order with the file that covers each episode, and **what's missing**: aired episodes you have no file for, season by season (episodes that haven't aired yet are listed separately, with the next air date).
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
+- 🗜️ **Re-encode to save space** — the Re-encode tab turns your videos into H.265 (or AV1, or H.264) with settings chosen for you: no bitrate, no jargon, three quality levels that all aim at "you can't tell the difference".
+  - **Smart about what to touch** — each file's format is read first; videos already in H.265/AV1, already small for their resolution, or in HDR are left unticked, with the reason. Only the picture is re-encoded: sound, subtitles, fonts and chapters are copied untouched, and the resolution is kept unless you choose a maximum (4K, 1080p, 720p, 480p) under *More options*.
+  - **Test on one file first** — re-encoding several files of a show starts with a test: short excerpts of one file are encoded at each quality level (a minute or two), and you get the estimated size, the space saved in % and a measured picture score for each, plus a before/after viewer on the same frames (move the pointer to slide between both, click to zoom). Pick a level, the whole batch runs with it.
+  - **Nothing is lost until you decide** — the original is never modified: the new file is written next to it (`name.reencoded.mkv`) and every finished file shows old size → new size, the gain in % and a quality label, with *Compare*, **Keep new** (deletes the original, the new file takes its name) and **Undo** (deletes the new file) — one file at a time, per show, or for everything. A new file that came out bigger says so, and one that came out shorter than the original is discarded. Close the app before deciding and the choice is still there next time.
+  - **ffmpeg, set up for you** — the work is done by [ffmpeg](https://ffmpeg.org), which is not shipped with the app. The tab opens on a guide: on Windows one button downloads the official build, checks it (SHA-256) and unpacks it into Subtitall's own folder — nothing else is installed, no administrator rights. On Linux and macOS you choose between that same automatic download and the ffmpeg of your system, with the commands for each distribution (`apt`, `dnf`, `pacman`, `zypper`, `brew`) and what to check on your `PATH`. An ffmpeg you already have is used as it is.
 - 🔄 **Auto-update** — the app updates itself from GitHub Releases, showing the download in the top bar; *Settings → Updates* has a *Check for updates* button and a *Restart to update* button once the update is ready. Installing is silent: the app closes, updates in place without the setup wizard, and reopens by itself.
 
 ## Install (Windows)
@@ -60,6 +69,7 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video; red chips = nothing saved — hover or click the chip to see what each source said.
 4. **Rename episodes** (Rename tab): shows are detected for you — pick one where the app asks, fix a season if a guess is wrong (each show, and each season of its files, has its own picker), check the proposed names, click *Rename*.
 5. **See what's missing** (Shows tab): pick a show to read about it, watch the trailer, and see which episodes you still need.
+6. **Save space** (Re-encode tab): the first time, click *Download and install ffmpeg* (about 200 MB, once). Then tick the files, click *Re-encode* — for several files of a show, a short test on one file lets you pick the quality first — and when a file is done, *Compare* it and choose **Keep new** or **Undo**. Search subtitles *before* re-encoding: a re-encoded file no longer matches the exact-file lookup some sources offer.
 
 ## Development
 
@@ -112,13 +122,17 @@ only (see Releasing).
 
 | Layer | Where | What |
 |---|---|---|
-| Core | `src/Subtitall/Core` | Filename parser, episode/season guesser, show detection, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, settings |
+| Core | `src/Subtitall/Core` | Filename parser, episode/season guesser, show detection, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, re-encode planner (`Core/Reencode`), settings |
 | API | `src/Subtitall/Api` | Minimal-API REST endpoints + Server-Sent Events for live progress |
 | UI | `src/Subtitall/wwwroot` | Simple tabbed interface — vanilla HTML/CSS/JS, zero frontend dependencies |
 | Shell | `Program.cs` + ElectronNET.Core | Electron window, native dialogs, auto-update |
 | Tests | `tests/Subtitall.Tests` | xUnit suite for the core logic |
 
-Settings are stored in `%APPDATA%/Subtitall/settings.json`.
+Settings are stored in `%APPDATA%/Subtitall/settings.json`. The ffmpeg downloaded by the Re-encode tab
+lives in `%APPDATA%/Subtitall/ffmpeg` (`~/.config/Subtitall/ffmpeg` on Linux); the tab uses, in this
+order, the folder set in *Settings → Re-encoding*, that download, then the `ffmpeg` + `ffprobe` of the
+`PATH` — the first one that actually runs. Real encodes are not covered by `dotnet test` (no ffmpeg
+on CI): after touching `Core/Reencode` or `ReencodeService`, re-encode a real file end to end.
 
 ### Releasing
 

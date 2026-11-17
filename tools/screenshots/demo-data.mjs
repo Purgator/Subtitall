@@ -329,3 +329,65 @@ export function showDetails(id) {
     ...coverage(s),
   };
 }
+
+// ---- Re-encode tab: one season half done ---------------------------------------------------------
+
+
+function videoOf(item) {
+  const name = item.fileName;
+  const uhd = name.includes("2160p"), sd = name.includes("720p");
+  const [width, height] = uhd ? [3840, 2160] : sd ? [1280, 720] : [1920, 1080];
+  const codec = name.includes("H265") ? "hevc" : "h264";
+  return {
+    codec, codecName: codec === "hevc" ? "H.265" : "H.264", width, height,
+    bitRate: Math.round(item.sizeBytes * 8 / (name.includes("Clockmakers") ? 6900 : 2580)),
+    durationSeconds: name.includes("Clockmakers") ? 6900 : 2580, hdr: false,
+  };
+}
+
+/** What POST /api/reencode/analyze returns: every file, and whether it is worth re-encoding. */
+export function reencodeFiles() {
+  return library.map((item) => {
+    const info = videoOf(item);
+    const efficient = info.codec === "hevc";
+    return {
+      itemId: item.id, info,
+      advice: {
+        kind: efficient ? "alreadyEfficient" : "recommended", recommended: !efficient, possible: true,
+        reason: efficient ? "Already H.265 — little to gain, some quality to lose" : "",
+      },
+    };
+  });
+}
+
+/** What GET /api/reencode/status returns: ffmpeg installed, a season of Harbor Lights under way. */
+export function reencodeStatus() {
+  const season = library.filter((i) => i.fileName.startsWith("Harbor.Lights.S01"));
+  const job = (item, state, extra = {}) => ({
+    itemId: item.id, state, percent: 0, speed: 0, etaSeconds: null, originalBytes: item.sizeBytes, newBytes: 0,
+    gainPercent: null, ssim: null, quality: null, error: null, codec: "hevc", level: "balanced", ...extra,
+  });
+  const done = (item, newGb, ssim) => job(item, "done", {
+    percent: 100, newBytes: Math.round(newGb * GB), gainPercent: Math.round((1 - newGb * GB / item.sizeBytes) * 1000) / 10,
+    ssim, quality: "Visually identical",
+  });
+  return {
+    ffmpeg: {
+      state: "ready", os: "windows", canDownload: true, source: "app", version: "8.0",
+      path: "C:\\Users\\you\\AppData\\Roaming\\Subtitall\\ffmpeg\\ffmpeg.exe",
+      encoders: ["libx265", "libx264", "libsvtav1"], percent: null, downloadedBytes: 0, totalBytes: 0, message: null,
+      installFolder: "C:\\Users\\you\\AppData\\Roaming\\Subtitall\\ffmpeg",
+    },
+    state: {
+      running: true,
+      jobs: [
+        done(season[0], 0.84, 0.9912),
+        done(season[1], 0.77, 0.9905),
+        job(season[2], "encoding", { percent: 42.3, speed: 1.8, etaSeconds: 780 }),
+        job(season[3], "queued"),
+        job(season[4], "queued"),
+      ],
+      trial: null,
+    },
+  };
+}

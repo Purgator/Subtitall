@@ -25,7 +25,7 @@ public sealed class LibraryService
                 long size = 0;
                 try { size = new FileInfo(fullPath).Length; } catch (IOException) { }
 
-                if (IsSampleFile(fullPath, size))
+                if (IsSampleFile(fullPath, size) || Reencode.EncodePlanner.IsPendingFile(fullPath))
                     continue;
 
                 var reading = MediaNameReader.Read(fullPath);
@@ -89,6 +89,21 @@ public sealed class LibraryService
         }
         // The new name is read afresh; detection re-runs for it (see MediaDetectionService).
         Reread(item);
+    }
+
+    /// <summary>
+    /// The file was replaced by a re-encoded copy: same video, possibly another extension and
+    /// certainly another size. What the app knows about it (show, episode) still holds.
+    /// </summary>
+    public void Replace(MediaItem item, string newPath)
+    {
+        lock (_lock)
+        {
+            _byPath.Remove(item.Path);
+            item.Path = Path.GetFullPath(newPath);
+            _byPath[item.Path] = item;
+        }
+        try { item.SizeBytes = new FileInfo(item.Path).Length; } catch (IOException) { }
     }
 
     /// <summary>Reads the file again from scratch, dropping what the user or a lookup said it was.</summary>

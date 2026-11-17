@@ -81,8 +81,15 @@ Packaging facts (verified 2026-10; do not "fix" these):
   a used-up download quota is a `QuotaExceededException` (tracked in `ProviderHealth`, never a
   circuit-breaker failure — searching still works). Enums serialize as camelCase strings.
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
-  layout (Files / Rename / Shows / Settings). Keep it simple and intuitive; do NOT style it after an IDE
+  layout (Files / Rename / Shows / Re-encode / Settings). Keep it simple and intuitive; do NOT style it after an IDE
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).
+- **Re-encoding** (the Re-encode tab) — `Core/Reencode/` is pure and tested: `VideoInfo` (ffprobe
+  JSON), `EncodePlanner` (is a file worth it, ffmpeg arguments, file names, trial maths, quality
+  labels), `FfmpegRunner` (process + parsers), `FfmpegLocator` / `FfmpegDownload` (where ffmpeg is,
+  which build to fetch). `Api/FfmpegService` finds or downloads ffmpeg (`ffmpeg-status` events),
+  `Api/ReencodeService` runs one encode at a time, the trial on excerpts, and keep/undo
+  (`reencode-changed`, `reencode-progress`, `reencode-trial` events); endpoints in
+  `Api/ReencodeEndpoints.cs`.
 - `Program.cs` — DI wiring, Electron window, auto-update check.
 
 ## Provider facts (verified 2026-08; do not "fix" these)
@@ -130,6 +137,31 @@ Packaging facts (verified 2026-10; do not "fix" these):
   never detect a show two different ways — both go through `ShowDetectionService` +
   `EpisodeGuesser` (via `MediaDetectionService`). When in doubt, ask the user (candidate list),
   don't pick silently; a user's show pick or season override always wins.
+
+## Re-encode facts (do not "fix" these)
+
+- **The original is never modified.** An encode writes `name.reencoded.<ext>.part`, renames it to
+  `name.reencoded.<ext>` once complete and as long as the original (`EncodePlanner.DurationMatches`),
+  and only *Keep new* (`ReencodeService.Apply`) deletes the original. Deleting is permanent and
+  asked for explicitly in the UI. A `.reencoded` file found next to a linked video at startup is a
+  pending decision (`AdoptPending`), not a new video (`LibraryService` skips it).
+- **Only the picture is encoded**: `-map 0:V` (capital V: no cover art) + audio, subtitles and
+  attachments copied. MP4/M4V stay MP4 (`hvc1` tag, faststart, no attachments); everything else
+  becomes MKV. Quality is constant-quality (CRF) only — no bitrate targets, no hardware encoders
+  (they compress worse at equal quality, which defeats the purpose).
+- **ffmpeg is never bundled** (size, and the installer must stay small): it is downloaded on
+  request into `%APPDATA%/Subtitall/ffmpeg`, or found on the PATH / in the user's folder. Builds:
+  BtbN `latest` release for Windows and Linux (asset names carry the version — pick the newest
+  `n*` one through the GitHub API, which also gives the SHA-256 `digest`), evermeet.cx zips for
+  macOS. The first ffmpeg that *runs* wins: on company computers a security policy can refuse to
+  start a freshly downloaded exe (seen with Microsoft Defender's "block executables unless they
+  meet a prevalence, age or trusted list criterion" rule) — that must be reported in plain words,
+  never worked around.
+- Linux and macOS users are offered both ways with the same weight (automatic download, or their
+  system's ffmpeg with per-distribution instructions); Windows leads with the one-click install.
+- The trial estimates the whole file from three 8-second excerpts: bytes of video vs. all tracks
+  in the original (ffprobe packet sizes) and the encoded size of the same excerpts. The picture
+  score is SSIM on those excerpts; its plain-words labels are in `EncodePlanner.QualityLabel`.
 
 ## Testing conventions
 

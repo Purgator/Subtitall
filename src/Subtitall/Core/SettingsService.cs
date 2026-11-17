@@ -68,6 +68,8 @@ public sealed class SettingsService
             .ToList();
         if (settings.Languages.Count == 0)
             settings.Languages = ["en"];
+        settings.Reencode ??= new ReencodeSettings();
+        settings.Reencode.FfmpegPath = (settings.Reencode.FfmpegPath ?? "").Trim().Trim('"');
         return settings;
     }
 }

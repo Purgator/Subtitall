@@ -24,7 +24,7 @@ public sealed class MediaItem
     /// <summary>Nothing says what this file is yet: worth a hash lookup, and the user's attention.</summary>
     public bool IsUnidentified => !MediaNameReader.IsUsable(Parsed);
 
-    public long SizeBytes { get; init; }
+    public long SizeBytes { get; set; }
 
     /// <summary>Language code → subtitle file already present next to the video.</summary>
     public Dictionary<string, bool> Subtitles { get; set; } = [];

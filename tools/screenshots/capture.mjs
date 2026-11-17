@@ -47,6 +47,10 @@ const shots = [
     ready: `!!document.querySelector("#show-details .episode-table") && document.querySelector("#show-details .poster").complete`,
   },
   {
+    file: "reencode.png", size: WINDOW, tab: "reencode",
+    ready: `document.querySelectorAll(".re-table tbody tr").length > 8 && !!document.querySelector(".re-table .re-progress") && !!document.querySelector(".re-quality")`,
+  },
+  {
     file: "settings.png", size: COMPACT, tab: "settings",
     // The page opens on the long language list; the providers below it say more about the app.
     act: `document.querySelector("#card-gestdown").closest(".settings-section").scrollIntoView()`,
@@ -77,6 +81,8 @@ function startServer(version) {
     "GET /api/subtitles/candidates": () => demo.candidates(),
     "POST /api/rename/proposals": () => demo.proposals(),
     "GET /api/shows": () => demo.shows(),
+    "GET /api/reencode/status": () => demo.reencodeStatus(),
+    "POST /api/reencode/analyze": () => demo.reencodeFiles(),
   };
 
   const server = createServer(async (req, res) => {

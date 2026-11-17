@@ -48,6 +48,19 @@ const state = {
   proposals: null,        // null = not loaded yet
   proposalChecks: {},     // itemId -> bool
   renameBusy: false,
+  // re-encode view
+  reencode: {
+    ffmpeg: null,         // what /api/reencode/status says about ffmpeg (null = not asked yet)
+    jobs: {},             // itemId -> job (queued, encoding, checking, done, failed)
+    running: false,
+    trial: null,          // the trial on short excerpts, running or finished
+    files: null,          // itemId -> { info, advice } (null = not analysed yet)
+    checks: {},           // itemId -> ticked for re-encoding
+    tested: {},           // group key -> quality level chosen after a trial
+    showOptions: false,
+    showOwn: false,
+    statusError: null,
+  },
 };
 
 // ---------- Utilities ----------------------------------------------------------
@@ -142,6 +155,11 @@ function connectEvents() {
       state.update = await get("/api/update/status");
       renderUpdateStatus();
     } catch { /* backend not ready yet */ }
+    // And for the encodes: one may have finished while the stream was down.
+    try {
+      await loadReencodeStatus();
+      if (state.view === "reencode") render(); else renderTopbar();
+    } catch { /* backend not ready yet */ }
   };
   source.onmessage = (event) => {
     const { type, data } = JSON.parse(event.data);
@@ -156,6 +174,37 @@ function connectEvents() {
         if (state.view !== "rename") state.proposals = null;
         else if (state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
         if (state.shows !== null) { state.showDetails = null; loadShowsDebounced(); }
+        // Same for what the Re-encode tab knows about each file.
+        if (type === "library-changed" && state.reencode.files !== null) {
+          if (state.view === "reencode") loadReencodeFilesDebounced();
+          else state.reencode.files = null;
+        }
+        break;
+      case "ffmpeg-status": {
+        const was = state.reencode.ffmpeg?.state;
+        state.reencode.ffmpeg = data;
+        if (state.view === "reencode") render();
+        if (data.state === "ready" && was && was !== "ready") toast(`ffmpeg ${data.version} is installed — you can re-encode now`, "ok", 6000);
+        break;
+      }
+      case "reencode-changed": {
+        const finished = state.reencode.running && !data.running;
+        applyReencodeState(data);
+        if (state.view === "reencode") render(); else renderTopbar();
+        if (reencodeModal?.kind === "trial" || (reencodeModal && state.reencode.jobs[reencodeModal.itemId]?.state !== "done")) renderReencodeModal();
+        if (finished && reDone().length) toast("Re-encoding finished — compare, then keep or undo in the Re-encode tab", "ok", 8000);
+        break;
+      }
+      case "reencode-progress": {
+        const job = state.reencode.jobs[data.itemId];
+        if (job) Object.assign(job, data);
+        renderTopbar();
+        renderReencodeRow(data.itemId);
+        break;
+      }
+      case "reencode-trial":
+        if (state.reencode.trial) Object.assign(state.reencode.trial, data);
+        if (reencodeModal?.kind === "trial") renderReencodeModal();
         break;
       case "batch-started":
         state.searching = true;
@@ -258,15 +307,19 @@ function renderTopbar() {
   document.getElementById("top-version").textContent = `v${state.meta.version}`;
   renderUpdateStatus();
   const progress = document.getElementById("top-progress");
-  progress.hidden = !state.searching;
-  if (state.searching)
-    document.getElementById("top-progress-text").textContent =
-      `Searching ${state.progress.done}/${state.progress.total}`;
+  const encoding = reencodeProgressText();
+  progress.hidden = !state.searching && !encoding;
+  document.getElementById("top-progress-text").textContent =
+    [state.searching ? `Searching ${state.progress.done}/${state.progress.total}` : "", encoding].filter(Boolean).join(" · ");
 }
 
 function renderMain() {
   const main = document.getElementById("main");
+  // The Re-encode view listens on the container itself; no other view may inherit that.
+  main.onclick = null;
+  main.onchange = null;
   if (state.view === "files") renderFilesView(main);
+  else if (state.view === "reencode") renderReencodeView(main);
   else if (state.view === "rename") renderRenameView(main);
   else if (state.view === "shows") renderShowsView(main);
   else renderSettingsView(main);
@@ -1419,6 +1472,12 @@ function renderSettingsView(main) {
       </div>
 
       <div class="settings-section">
+        <h3>Re-encoding</h3>
+        <div class="desc">The Re-encode tab works with ffmpeg: the one Subtitall downloaded, else the one on your PATH. Give a folder here only to use another one (it must contain both <code>ffmpeg</code> and <code>ffprobe</code>).</div>
+        <div class="settings-row"><label>ffmpeg folder</label><input class="input" id="ffmpeg-folder" value="${esc(reSettings().ffmpegPath)}" placeholder="Automatic" style="max-width:430px"></div>
+      </div>
+
+      <div class="settings-section">
         <h3>Updates</h3>
         <div class="desc">Subtitall v${esc(state.meta.version)} — updates come from GitHub Releases and install when you restart the app.</div>
         <div class="settings-row">
@@ -1451,6 +1510,7 @@ function renderSettingsView(main) {
       subDl: { ...s.subDl, enabled: main.querySelector("#subdl-enabled").checked, apiKey: main.querySelector("#subdl-key").value.trim() },
       subSource: { ...s.subSource, enabled: main.querySelector("#subsource-enabled").checked, apiKey: main.querySelector("#subsource-key").value.trim() },
       tmdb: { ...s.tmdb, enabled: main.querySelector("#tmdb-enabled").checked, apiKey: main.querySelector("#tmdb-key").value.trim() },
+      reencode: { ...reSettings(), ffmpegPath: main.querySelector("#ffmpeg-folder").value.trim() },
       overwriteExisting: main.querySelector("#overwrite").checked,
       renameTemplate: main.querySelector("#rename-template").value.trim() || "{Show} - S{Season}E{Episode} - {Title}",
     };
@@ -1471,6 +1531,7 @@ function renderSettingsView(main) {
       const saved = await put("/api/settings", updated);
       if (token !== settingsSaveToken) return;
       state.settings = saved;
+      state.reencode.ffmpeg = null; // the ffmpeg folder may have changed: ask again
       status.textContent = "Saved ✓";
       status.className = "hint-text ok-text";
       loadProviderStatus();
@@ -1644,6 +1705,722 @@ function renderUpdateStatus() {
   }
 }
 
+// ---------- Re-encode view ---------------------------------------------------------------------------
+
+const RE_LEVELS = {
+  high: ["Best quality", "Closest to the original, smallest gain"],
+  balanced: ["Balanced", "Recommended — no visible difference on most videos"],
+  compact: ["Smallest", "Biggest gain — a trained eye may notice"],
+};
+const RE_CODECS = {
+  hevc: ["H.265", "libx265", "recommended"],
+  av1: ["AV1", "libsvtav1", "smaller, slower, recent devices only"],
+  h264: ["H.264", "libx264", "bigger files, plays everywhere"],
+};
+const RE_SPEEDS = { fast: "Fast", normal: "Normal", slow: "Slow (smaller files)" };
+const RE_HEIGHTS = { 0: "Keep the resolution", 2160: "At most 4K (2160p)", 1080: "At most 1080p", 720: "At most 720p", 480: "At most 480p" };
+
+function reSettings() {
+  return { ffmpegPath: "", codec: "hevc", quality: "balanced", speed: "normal", maxHeight: 0, ...(state.settings?.reencode || {}) };
+}
+
+function applyReencodeState(s) {
+  const r = state.reencode;
+  r.running = s.running;
+  r.jobs = Object.fromEntries(s.jobs.map((j) => [j.itemId, j]));
+  r.trial = s.trial;
+}
+
+async function loadReencodeStatus() {
+  const status = await get("/api/reencode/status");
+  state.reencode.ffmpeg = status.ffmpeg;
+  applyReencodeState(status.state);
+}
+
+// Guards against an older analysis landing after a newer one.
+let reFilesToken = 0;
+
+async function loadReencodeFiles() {
+  const token = ++reFilesToken;
+  const r = state.reencode;
+  try {
+    const list = await post("/api/reencode/analyze");
+    if (token !== reFilesToken) return;
+    r.files = Object.fromEntries(list.map((f) => [f.itemId, f]));
+    // Ticked by default: the files worth re-encoding. The user's own ticks are kept.
+    for (const f of list) if (!(f.itemId in r.checks)) r.checks[f.itemId] = f.advice.recommended;
+  } catch (err) {
+    if (token !== reFilesToken) return;
+    r.files = {};
+    toast(`Could not read the videos: ${err.message}`, "err");
+  }
+  if (state.view === "reencode") render();
+}
+
+const loadReencodeFilesDebounced = debounce(() => loadReencodeFiles().catch(console.error), 400);
+
+async function saveReencodeSettings(changes) {
+  try {
+    state.settings = await put("/api/settings", { ...state.settings, reencode: { ...reSettings(), ...changes } });
+  } catch (err) {
+    toast(`Could not save: ${err.message}`, "err");
+  }
+}
+
+function formatDuration(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "";
+  if (seconds < 60) return "less than a minute left";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min left`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} left`;
+}
+
+function formatClock(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h ? h + ":" + String(m).padStart(2, "0") : m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function gainHtml(percent) {
+  if (percent == null) return "";
+  return percent > 0
+    ? `<b class="re-gain">−${percent}%</b>`
+    : `<b class="re-gain bad">+${Math.abs(percent)}%</b>`;
+}
+
+function videoInfoText(info) {
+  if (!info) return "";
+  const parts = [info.codecName, `${info.width}×${info.height}`];
+  if (info.bitRate) parts.push(`${(info.bitRate / 1e6).toFixed(info.bitRate >= 1e7 ? 0 : 1)} Mb/s`);
+  if (info.hdr) parts.push("HDR");
+  return parts.join(" · ");
+}
+
+// ---- ffmpeg: guide and install --------------------------------------------------------------------
+
+function codeHtml(command) {
+  return `<span class="cmd"><code>${esc(command)}</code><button class="btn small secondary" data-copy="${esc(command)}">Copy</button></span>`;
+}
+
+function ffmpegDownloadHtml(f) {
+  const busy = f.state === "downloading" || f.state === "installing";
+  if (busy) {
+    const amount = f.totalBytes ? `${formatSize(f.downloadedBytes)} of ${formatSize(f.totalBytes)}` : "";
+    return `
+      <div class="re-progress big"><div style="width:${f.state === "installing" ? 100 : f.percent || 0}%"></div></div>
+      <div class="re-install-line">
+        <span><span class="spin"></span> ${esc(f.message || "Working…")} ${amount && f.state === "downloading" ? `<span class="hint-text">${amount}</span>` : ""}</span>
+        ${f.state === "downloading" ? `<button class="btn small secondary" data-re="ffmpeg-cancel">Cancel</button>` : ""}
+      </div>`;
+  }
+  return `
+    ${f.state === "error" && f.message ? `<div class="warn-text" style="margin-bottom:10px">${esc(f.message)}</div>` : ""}
+    <button class="btn" data-re="ffmpeg-install">${f.state === "error" ? "Try again" : "Download and install ffmpeg"}</button>`;
+}
+
+function ffmpegOwnHtml(f) {
+  const path = `
+    <div class="re-own-row">
+      <input class="input" id="re-ffmpeg-path" value="${esc(reSettings().ffmpegPath)}" placeholder="${f.os === "windows" ? "C:\\Tools\\ffmpeg\\bin" : "/opt/ffmpeg/bin"}">
+      <button class="btn secondary" data-re="ffmpeg-recheck">Check again</button>
+    </div>`;
+  if (f.os === "windows") {
+    return `
+      <p>Install it with Windows' own package manager — in a terminal (PowerShell):</p>
+      ${codeHtml("winget install Gyan.FFmpeg")}
+      <p>then click <i>Check again</i>. Or, if you already have ffmpeg somewhere, give the folder that contains <code>ffmpeg.exe</code> and <code>ffprobe.exe</code>:</p>
+      ${path}`;
+  }
+  if (f.os === "mac") {
+    return `
+      <p>Install it with <a href="https://brew.sh" target="_blank">Homebrew</a>, in a terminal:</p>
+      ${codeHtml("brew install ffmpeg")}
+      <p>then click <i>Check again</i>. Subtitall looks for <code>ffmpeg</code> and <code>ffprobe</code> on your PATH. An app started from the Dock does not always see Homebrew's folder — if it is not found, give it here (<code>/opt/homebrew/bin</code> on Apple Silicon, <code>/usr/local/bin</code> on Intel):</p>
+      ${path}`;
+  }
+  return `
+    <p>Subtitall uses the <code>ffmpeg</code> and <code>ffprobe</code> commands found on your <code>PATH</code>. Install them with your package manager:</p>
+    <table class="re-distros">
+      <tr><td>Debian, Ubuntu, Mint</td><td>${codeHtml("sudo apt install ffmpeg")}</td></tr>
+      <tr><td>Fedora</td><td>${codeHtml("sudo dnf install ffmpeg --allowerasing")}<div class="hint-text">Needs the <a href="https://rpmfusion.org/Configuration" target="_blank">RPM Fusion</a> repository — Fedora's own <code>ffmpeg-free</code> cannot encode H.265.</div></td></tr>
+      <tr><td>Arch, Manjaro</td><td>${codeHtml("sudo pacman -S ffmpeg")}</td></tr>
+      <tr><td>openSUSE</td><td>${codeHtml("sudo zypper install ffmpeg")}<div class="hint-text">With the Packman repository for H.265.</div></td></tr>
+    </table>
+    <p>Check it in a terminal — both commands must answer, and the second must list <code>libx265</code>:</p>
+    ${codeHtml("ffprobe -version && ffmpeg -hide_banner -encoders | grep 265")}
+    <p>then click <i>Check again</i>. If Subtitall was started from a desktop launcher, its PATH can differ from your terminal's (<code>~/.local/bin</code>, <code>~/bin</code>…). In that case, or for a build of your own, give the folder that contains both programs:</p>
+    ${path}`;
+}
+
+function renderFfmpegGuide(main) {
+  const f = state.reencode.ffmpeg;
+  const busy = f.state === "downloading" || f.state === "installing";
+  const folder = esc(f.installFolder);
+  const what = f.os === "mac"
+    ? `the ffmpeg build for macOS from <b>evermeet.cx</b> (linked by ffmpeg.org; an Intel build — on Apple Silicon it runs through Rosetta)`
+    : `the official ffmpeg build for ${f.os === "windows" ? "Windows" : "Linux"} (about 200 MB) from <b>github.com/BtbN/FFmpeg-Builds</b>, the builds ffmpeg.org links to`;
+  const auto = `
+    <ol class="re-steps">
+      <li>Subtitall downloads ${what}.</li>
+      <li>It checks that the download is intact${f.os === "mac" ? "" : " (SHA-256 checksum)"}.</li>
+      <li>It unpacks <code>ffmpeg</code> and <code>ffprobe</code> into its own folder, <code>${folder}</code>. Nothing else on your computer is changed and no administrator rights are needed.</li>
+    </ol>
+    ${f.canDownload ? ffmpegDownloadHtml(f) : `<div class="warn-text">No ready-made ffmpeg exists for this kind of computer — install it yourself.</div>`}`;
+
+  const intro = `
+    <div class="re-guide-head">
+      <h2>One thing to set up first</h2>
+      <p>Re-encoding is done by <b>ffmpeg</b>, a free and open-source video tool that Subtitall does not ship with. It is installed once, then this tab just works.</p>
+    </div>`;
+
+  if (f.os === "windows") {
+    main.innerHTML = `
+      <div class="card re-guide">
+        ${intro}
+        <div class="re-choice">
+          <h3>Let Subtitall install it <span class="badge-rec">recommended</span></h3>
+          ${auto}
+        </div>
+        <details class="re-choice" ${state.reencode.showOwn || f.state === "error" ? "open" : ""} id="re-own">
+          <summary>I already have ffmpeg, or I'd rather install it myself</summary>
+          ${ffmpegOwnHtml(f)}
+        </details>
+      </div>`;
+  } else {
+    // Linux and macOS users often want their system's ffmpeg: both ways get the same weight.
+    main.innerHTML = `
+      <div class="card re-guide">
+        ${intro}
+        <div class="re-choices">
+          <div class="re-choice">
+            <h3>Let Subtitall download it</h3>
+            <p class="hint-text">Fully automatic, nothing to type. Your system is left untouched.</p>
+            ${auto}
+          </div>
+          <div class="re-choice">
+            <h3>Use my system's ffmpeg</h3>
+            <p class="hint-text">Kept up to date by your package manager.</p>
+            ${ffmpegOwnHtml(f)}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const own = main.querySelector("#re-own");
+  if (own) own.ontoggle = () => { state.reencode.showOwn = own.open; };
+  main.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = "Copied ✓"; }
+      catch { toast("Could not copy — select the command and copy it by hand", "err"); }
+    };
+  });
+  main.onclick = async (e) => {
+    const action = e.target.closest("[data-re]")?.dataset.re;
+    if (!action) return;
+    try {
+      if (action === "ffmpeg-install") await post("/api/reencode/ffmpeg/install");
+      else if (action === "ffmpeg-cancel") await post("/api/reencode/ffmpeg/cancel");
+      else if (action === "ffmpeg-recheck") {
+        const input = main.querySelector("#re-ffmpeg-path");
+        if (input && input.value.trim() !== reSettings().ffmpegPath) await saveReencodeSettings({ ffmpegPath: input.value.trim() });
+        state.reencode.ffmpeg = await post("/api/reencode/ffmpeg/recheck");
+        if (state.reencode.ffmpeg.state === "ready") toast(`ffmpeg ${state.reencode.ffmpeg.version} found`, "ok");
+        else toast(state.reencode.ffmpeg.message || "ffmpeg and ffprobe were not found", "err", 7000);
+        render();
+      }
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  };
+  if (busy) main.querySelector("#re-ffmpeg-path")?.setAttribute("disabled", "");
+}
+
+// ---- File list --------------------------------------------------------------------------------------
+
+// The files of a group a click on "Re-encode" would start: ticked, encodable, not already handled.
+function reSelected(group) {
+  const r = state.reencode;
+  return group.items.filter((i) => r.checks[i.id] && r.files?.[i.id]?.advice.possible && (!r.jobs[i.id] || r.jobs[i.id].state === "failed"));
+}
+
+function reDone(items = state.items) {
+  return items.map((i) => state.reencode.jobs[i.id]).filter((j) => j?.state === "done");
+}
+
+function reStatusHtml(item) {
+  const r = state.reencode;
+  const job = r.jobs[item.id];
+  const file = r.files?.[item.id];
+  if (!job) {
+    if (!file) return `<span class="hint-text">…</span>`;
+    return file.advice.recommended ? "" : `<span class="hint-text" title="You can still tick it">${esc(file.advice.reason)}</span>`;
+  }
+  switch (job.state) {
+    case "queued":
+      return `<span class="hint-text">Waiting…</span> <button class="icon-btn" data-re="cancel" data-id="${item.id}" title="Remove from the queue">&#10005;</button>`;
+    case "encoding":
+      return `
+        <div class="re-progress"><div style="width:${job.percent}%"></div></div>
+        <span class="re-progress-text">${Math.floor(job.percent)}%${job.etaSeconds != null ? ` · ${formatDuration(job.etaSeconds)}` : ""}</span>
+        <button class="icon-btn" data-re="cancel" data-id="${item.id}" title="Stop — the original stays as it is">&#10005;</button>`;
+    case "checking":
+      return `<span class="hint-text"><span class="spin"></span> Checking the quality…</span>`;
+    case "failed":
+      return `<span class="warn-text" title="${esc(job.error)}">Failed: ${esc(job.error)}</span> <button class="btn small secondary" data-re="revert" data-id="${item.id}">Dismiss</button>`;
+    default: {
+      const worse = job.gainPercent <= 0;
+      return `
+        <span class="re-result" title="Original → re-encoded">${formatSize(job.originalBytes)} → <b>${formatSize(job.newBytes)}</b> ${gainHtml(job.gainPercent)}</span>
+        ${worse ? `<span class="warn-text">no gain — undo it</span>`
+          : job.quality ? `<span class="re-quality" title="Measured on a few excerpts (SSIM ${job.ssim})">${esc(job.quality)}</span>` : ""}
+        <span class="re-row-actions">
+          <button class="btn small secondary" data-re="compare" data-id="${item.id}">Compare</button>
+          ${worse ? "" : `<button class="btn small" data-re="apply" data-id="${item.id}" title="Delete the original and keep the new file">Keep new</button>`}
+          <button class="btn small secondary" data-re="revert" data-id="${item.id}" title="Delete the new file and keep the original">Undo</button>
+        </span>`;
+    }
+  }
+}
+
+function reRowHtml(item) {
+  const r = state.reencode;
+  const file = r.files?.[item.id];
+  const job = r.jobs[item.id];
+  const locked = !!job && job.state !== "failed";
+  return `
+    <tr data-re-row="${item.id}">
+      <td class="col-check"><input type="checkbox" data-re-check="${item.id}" ${r.checks[item.id] && !locked ? "checked" : ""} ${locked || !file?.advice.possible ? "disabled" : ""}></td>
+      <td title="${esc(item.path)}">${esc(item.fileName)}</td>
+      <td class="col-video">${esc(videoInfoText(file?.info))}</td>
+      <td class="col-size">${formatSize(job?.originalBytes || item.sizeBytes)}</td>
+      <td class="col-status" data-re-status="${item.id}">${reStatusHtml(item)}</td>
+    </tr>`;
+}
+
+function reGroupActionsHtml(group) {
+  const selected = reSelected(group);
+  const done = reDone(group.items);
+  const keepable = done.filter((j) => j.gainPercent > 0);
+  const parts = [];
+  if (selected.length) {
+    parts.push(`<button class="btn small secondary" data-re="trial" data-group="${esc(group.key)}" title="Encode short excerpts of one file at each quality level, and compare">Test on one file</button>`);
+    parts.push(`<button class="btn small" data-re="start" data-group="${esc(group.key)}">Re-encode ${selected.length} file${selected.length === 1 ? "" : "s"}</button>`);
+  }
+  if (done.length > 1) {
+    if (keepable.length) parts.push(`<button class="btn small" data-re="apply-group" data-group="${esc(group.key)}" title="Delete the originals and keep the new files">Keep ${keepable.length} new files</button>`);
+    parts.push(`<button class="btn small secondary" data-re="revert-group" data-group="${esc(group.key)}" title="Delete the new files and keep the originals">Undo all</button>`);
+  }
+  return parts.join("");
+}
+
+function reGroupSummary(group) {
+  const done = reDone(group.items);
+  const total = group.items.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
+  let text = `${group.items.length} file${group.items.length === 1 ? "" : "s"} · ${formatSize(total)}`;
+  if (done.length) {
+    const before = done.reduce((s, j) => s + j.originalBytes, 0), after = done.reduce((s, j) => s + j.newBytes, 0);
+    if (before > after) text += ` · ${done.length} re-encoded: ${formatSize(before - after)} to save`;
+  }
+  return text;
+}
+
+function reGroupHtml(group) {
+  const name = group.kind === "title" ? `“${esc(group.name)}”` : esc(group.name);
+  return `
+    <div class="card re-group" data-re-group="${esc(group.key)}">
+      <div class="group-head">
+        <div class="meta">
+          <div class="name">${name}</div>
+          <div class="sub" data-re-summary>${esc(reGroupSummary(group))}</div>
+        </div>
+        <span class="re-group-actions">${reGroupActionsHtml(group)}</span>
+      </div>
+      <table class="file-table re-table">
+        <thead><tr><th class="col-check"></th><th>File</th><th class="col-video">Video</th><th class="col-size">Size</th><th class="col-status">Re-encoding</th></tr></thead>
+        <tbody>${group.items.map(reRowHtml).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function reOptionsHtml() {
+  const s = reSettings();
+  const f = state.reencode.ffmpeg;
+  const select = (id, current, entries) => `
+    <select class="input" id="${id}">
+      ${entries.map(([value, label, off]) => `<option value="${value}" ${String(current) === String(value) ? "selected" : ""} ${off ? "disabled" : ""}>${esc(label)}</option>`).join("")}
+    </select>`;
+  const where = { app: "installed by Subtitall", path: "from your system", custom: "from the folder you set" }[f.source] || "";
+  const missing = !f.encoders.includes(RE_CODECS[s.codec][1]);
+  return `
+    <div class="actionbar re-options">
+      <label>Quality ${select("re-quality", s.quality, Object.entries(RE_LEVELS).map(([k, v]) => [k, `${v[0]} — ${v[1]}`]))}</label>
+      <span class="linkish hint-text" id="re-more">${state.reencode.showOptions ? "Fewer options" : "More options"}</span>
+      <div class="grow"></div>
+      <span class="hint-text" title="${esc(f.path)}">ffmpeg ${esc(f.version)} · ${where}</span>
+      ${state.reencode.running ? `<button class="btn small secondary danger" data-re="cancel-all">Stop everything</button>` : ""}
+    </div>
+    ${state.reencode.showOptions ? `
+      <div class="actionbar re-options">
+        <label>Format ${select("re-codec", s.codec, Object.entries(RE_CODECS).map(([k, v]) => [k, `${v[0]} — ${f.encoders.includes(v[1]) ? v[2] : "not in this ffmpeg"}`, !f.encoders.includes(v[1])]))}</label>
+        <label>Speed ${select("re-speed", s.speed, Object.entries(RE_SPEEDS))}</label>
+        <label>Resolution ${select("re-height", s.maxHeight, Object.entries(RE_HEIGHTS).sort((a, b) => (a[0] == 0 ? -1 : b[0] == 0 ? 1 : b[0] - a[0])))}</label>
+        <span class="hint-text">Sound, subtitles and chapters are always copied untouched.</span>
+      </div>` : ""}
+    ${missing ? `
+      <div class="re-banner warn">This ffmpeg cannot encode ${RE_CODECS[s.codec][0]} (it was built without <code>${RE_CODECS[s.codec][1]}</code>). Pick another format in <i>More options</i>${f.canDownload && f.source !== "app" ? `, or <span class="linkish" data-re="ffmpeg-install">let Subtitall download a complete ffmpeg</span>` : ""}.</div>` : ""}`;
+}
+
+function reTotalsHtml() {
+  const done = reDone();
+  if (!done.length) {
+    return `<div class="re-banner">The original files are never touched: each new file is written next to its original, and you decide afterwards — <b>Keep new</b> deletes the original, <b>Undo</b> deletes the new file. Videos already in an efficient format are left unticked.</div>`;
+  }
+  const before = done.reduce((s, j) => s + j.originalBytes, 0), after = done.reduce((s, j) => s + j.newBytes, 0);
+  const keepable = done.filter((j) => j.gainPercent > 0).length;
+  return `
+    <div class="re-banner totals">
+      <span><b>${done.length}</b> file${done.length === 1 ? "" : "s"} re-encoded, waiting for your decision: ${formatSize(before)} → <b>${formatSize(after)}</b> ${gainHtml(before ? Math.round((1 - after / before) * 1000) / 10 : 0)} <span class="hint-text">Both versions are on your disk until you decide.</span></span>
+      <span class="grow"></span>
+      ${keepable ? `<button class="btn small" data-re="apply-all">Keep all new files</button>` : ""}
+      <button class="btn small secondary" data-re="revert-all">Undo all</button>
+    </div>`;
+}
+
+function renderReencodeView(main) {
+  const r = state.reencode;
+  if (!r.ffmpeg) {
+    main.innerHTML = r.statusError
+      ? `<div class="panel-empty warn-text">${esc(r.statusError)}</div>`
+      : `<div class="panel-empty"><span class="spin"></span> Checking for ffmpeg…</div>`;
+    if (!r.statusError)
+      loadReencodeStatus().catch((err) => { r.statusError = err.message; }).finally(() => { if (state.view === "reencode") render(); });
+    return;
+  }
+  if (r.ffmpeg.state !== "ready") { renderFfmpegGuide(main); return; }
+  if (!state.items.length) {
+    main.innerHTML = `<div class="dropzone"><div class="title">Nothing to re-encode yet</div><div>Add videos in the Files tab (or drop them here): Subtitall then tells you which ones can be made smaller without visible loss.</div></div>`;
+    return;
+  }
+  if (r.files === null) {
+    main.innerHTML = `<div class="panel-empty"><span class="spin"></span> Reading your videos…</div>`;
+    loadReencodeFiles();
+    return;
+  }
+
+  main.innerHTML = `${reOptionsHtml()}${reTotalsHtml()}${mediaGroups().map(reGroupHtml).join("")}`;
+
+  const change = (id, key, convert = (v) => v) => {
+    const el = main.querySelector(id);
+    if (el) el.onchange = async () => {
+      await saveReencodeSettings({ [key]: convert(el.value) });
+      // What is worth re-encoding depends on the options (a smaller resolution always is).
+      if (key !== "quality" && key !== "speed") { r.files = null; r.checks = {}; }
+      if (r.trial && r.trial.state !== "running") post("/api/reencode/trial/cancel").catch(() => {});
+      render();
+    };
+  };
+  change("#re-quality", "quality");
+  change("#re-codec", "codec");
+  change("#re-speed", "speed");
+  change("#re-height", "maxHeight", Number);
+  main.querySelector("#re-more").onclick = () => { r.showOptions = !r.showOptions; render(); };
+
+  main.onchange = (e) => {
+    const id = e.target.dataset?.reCheck;
+    if (!id) return;
+    r.checks[id] = e.target.checked;
+    const card = e.target.closest("[data-re-group]");
+    const group = mediaGroups().find((g) => g.key === card.dataset.reGroup);
+    if (group) card.querySelector(".re-group-actions").innerHTML = reGroupActionsHtml(group);
+  };
+  main.onclick = (e) => {
+    const el = e.target.closest("[data-re]");
+    if (el) reencodeAction(el.dataset.re, el.dataset).catch((err) => toast(err.message, "err"));
+  };
+}
+
+// Redraws what one file's job changed, without rebuilding the whole view under the user's cursor.
+function renderReencodeRow(itemId) {
+  if (state.view !== "reencode") return;
+  const cell = document.querySelector(`[data-re-status="${itemId}"]`);
+  const item = state.items.find((i) => i.id === itemId);
+  if (cell && item) cell.innerHTML = reStatusHtml(item);
+}
+
+function reReport(outcomes, done) {
+  const failed = outcomes.filter((o) => !o.ok);
+  const ok = outcomes.length - failed.length;
+  if (ok) toast(done(ok), "ok");
+  if (failed.length) toast(`${failed.length} file${failed.length === 1 ? "" : "s"} could not be handled: ${failed[0].error}`, "err", 8000);
+}
+
+async function reApply(ids) {
+  if (!ids.length) return;
+  const many = ids.length > 1;
+  if (!confirm(`Keep the new file${many ? "s" : ""} and delete the ${many ? ids.length + " originals" : "original"} for good?\n\nThis cannot be undone.`)) return;
+  reReport(await post("/api/reencode/apply", { itemIds: ids }), (n) => `${n} original${n === 1 ? "" : "s"} replaced by the smaller file`);
+  closeReencodeModal();
+}
+
+async function reRevert(ids) {
+  if (!ids.length) return;
+  reReport(await post("/api/reencode/revert", { itemIds: ids }), (n) => `${n} new file${n === 1 ? "" : "s"} removed — the original${n === 1 ? " is" : "s are"} untouched`);
+  closeReencodeModal();
+}
+
+async function reStart(ids, quality) {
+  if (!ids.length) return;
+  const { queued } = await post("/api/reencode/start", { itemIds: ids, quality: quality || null });
+  if (queued) toast(`${queued} file${queued === 1 ? "" : "s"} queued — you can keep using the app`, "ok");
+}
+
+async function reencodeAction(action, data) {
+  const r = state.reencode;
+  const group = data.group != null ? mediaGroups().find((g) => g.key === data.group) : null;
+  const keepable = (items) => reDone(items).filter((j) => j.gainPercent > 0).map((j) => j.itemId);
+  switch (action) {
+    case "start": {
+      const ids = reSelected(group).map((i) => i.id);
+      // Several files of one show: try on one first, unless that was already done for this group.
+      if (ids.length > 1 && !r.tested[group.key]) openTrialModal(group.key, ids);
+      else await reStart(ids, r.tested[group.key]);
+      break;
+    }
+    case "trial": openTrialModal(group.key, reSelected(group).map((i) => i.id)); break;
+    case "cancel": await post("/api/reencode/cancel", { itemId: data.id }); break;
+    case "cancel-all": await post("/api/reencode/cancel", {}); break;
+    case "apply": await reApply([data.id]); break;
+    case "revert": await reRevert([data.id]); break;
+    case "apply-group": await reApply(keepable(group.items)); break;
+    case "revert-group": await reRevert(reDone(group.items).map((j) => j.itemId)); break;
+    case "apply-all": await reApply(keepable(state.items)); break;
+    case "revert-all": await reRevert(reDone().map((j) => j.itemId)); break;
+    case "compare": openCompareModal(data.id); break;
+    case "ffmpeg-install": await post("/api/reencode/ffmpeg/install"); break;
+  }
+}
+
+// ---- Before / after viewer ---------------------------------------------------------------------------
+
+// Two pictures of the same frame under a divider that follows the pointer.
+function compareViewerHtml(sourceUrl, newUrl, label) {
+  return `
+    <div class="cmp" style="--split:50%">
+      <img class="cmp-new" src="${esc(newUrl)}" alt="" draggable="false">
+      <img class="cmp-old" src="${esc(sourceUrl)}" alt="" draggable="false">
+      <div class="cmp-line"></div>
+      <span class="cmp-tag left">Original</span>
+      <span class="cmp-tag right">${esc(label)}</span>
+    </div>
+    <div class="hint-text cmp-help">Move the pointer over the picture to slide between the two versions · click to zoom in and out</div>`;
+}
+
+function bindCompareViewer(root) {
+  const cmp = root.querySelector(".cmp");
+  if (!cmp) return;
+  cmp.onmousemove = (e) => {
+    const box = cmp.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - box.top) / box.height));
+    cmp.style.setProperty("--split", `${x * 100}%`);
+    cmp.style.setProperty("--ox", `${x * 100}%`);
+    cmp.style.setProperty("--oy", `${y * 100}%`);
+  };
+  cmp.onclick = () => cmp.classList.toggle("zoom");
+}
+
+let reencodeModal = null; // { kind: "trial" | "compare", … } — what the modal shows right now
+
+function closeReencodeModal() {
+  if (!reencodeModal) return;
+  reencodeModal = null;
+  document.getElementById("modal-root").innerHTML = "";
+}
+
+function positionButtonsHtml(positions, current) {
+  if (positions.length < 2) return "";
+  return `<span class="cmp-positions">Moment: ${positions.map((p, i) =>
+    `<button class="btn small ${i === current ? "" : "secondary"}" data-pos="${i}">${formatClock(p)}</button>`).join("")}</span>`;
+}
+
+// ---- Trial (short excerpts at each quality level) ---------------------------------------------------
+
+async function openTrialModal(groupKey, itemIds) {
+  if (!itemIds.length) return;
+  const r = state.reencode;
+  reencodeModal = { kind: "trial", groupKey, itemIds, level: state.reencode.tested[groupKey] || reSettings().quality, pos: 0 };
+  // A finished trial of the same file is shown again instead of being redone.
+  const reuse = r.trial && r.trial.itemId === itemIds[0] && r.trial.state !== "failed" && r.trial.codec === reSettings().codec;
+  if (!reuse) {
+    r.trial = { itemId: itemIds[0], fileName: state.items.find((i) => i.id === itemIds[0])?.fileName || "", state: "running", percent: 0, step: "Starting…", levels: [], positions: [] };
+    renderReencodeModal();
+    try {
+      await post("/api/reencode/trial", { itemId: itemIds[0] });
+    } catch (err) {
+      r.trial = { ...r.trial, state: "failed", error: err.message };
+    }
+  }
+  renderReencodeModal();
+}
+
+function trialModalHtml(m) {
+  const t = state.reencode.trial;
+  const n = m.itemIds.length;
+  if (!t) return `<div class="modal-empty">The test was cancelled.</div>`;
+  if (t.state === "failed") return `<div class="modal-empty warn-text">The test failed: ${esc(t.error)}</div>`;
+
+  const levels = t.levels || [];
+  const table = levels.length ? `
+    <table class="cand-table re-levels">
+      <thead><tr><th></th><th>Quality level</th><th>Estimated size</th><th>Space saved</th><th>Picture</th></tr></thead>
+      <tbody>
+        ${levels.map((l) => `
+          <tr class="${l.quality === m.level ? "selected" : ""}" data-level="${l.quality}">
+            <td><input type="radio" name="re-level" ${l.quality === m.level ? "checked" : ""} ${t.state === "done" ? "" : "disabled"}></td>
+            <td><b>${RE_LEVELS[l.quality][0]}</b><div class="hint-text">${RE_LEVELS[l.quality][1]}</div></td>
+            <td>${formatSize(t.originalBytes)} → <b>${formatSize(l.estimatedBytes)}</b></td>
+            <td>${gainHtml(l.gainPercent)}</td>
+            <td title="${l.ssim != null ? `SSIM ${l.ssim} (1 = identical)` : ""}">${esc(l.label || "not measured")}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>` : "";
+
+  if (t.state === "running") {
+    return `
+      <div class="re-trial-progress">
+        <div class="re-progress big"><div style="width:${t.percent || 0}%"></div></div>
+        <div class="re-install-line"><span><span class="spin"></span> <span id="re-trial-step">${esc(t.step || "Working…")}</span></span>
+          <span class="hint-text">About a minute or two — short excerpts are encoded at three quality levels.</span></div>
+      </div>
+      ${table}
+      <div class="identify-actions re-modal-actions">
+        <span class="linkish hint-text" id="re-skip">Skip the test and re-encode ${n} file${n === 1 ? "" : "s"} now</span>
+        <div class="grow"></div>
+        <button class="btn secondary" id="re-trial-cancel">Cancel</button>
+      </div>`;
+  }
+
+  const chosen = levels.find((l) => l.quality === m.level) || levels[0];
+  const pos = Math.min(m.pos, Math.max(0, t.positions.length - 1));
+  const frame = (name) => `/api/reencode/frame/${t.key}/${name}-${pos}.png`;
+  return `
+    <div class="hint-text re-trial-intro">Short excerpts of this file were encoded at three quality levels. Sizes are estimates for the whole file; the picture was measured against the original.</div>
+    ${table}
+    ${chosen ? `
+      <div class="cmp-bar">${positionButtonsHtml(t.positions, pos)}</div>
+      ${compareViewerHtml(frame("source"), frame(chosen.quality), RE_LEVELS[chosen.quality][0])}` : ""}
+    <div class="identify-actions re-modal-actions">
+      <span class="linkish hint-text" id="re-trial-again">Run the test again</span>
+      <div class="grow"></div>
+      <button class="btn secondary" id="re-trial-close">Close</button>
+      <button class="btn" id="re-trial-go" ${chosen ? "" : "disabled"}>Re-encode ${n} file${n === 1 ? "" : "s"} — ${chosen ? RE_LEVELS[chosen.quality][0] : ""}</button>
+    </div>`;
+}
+
+// ---- Comparison of a finished file ---------------------------------------------------------------------
+
+async function openCompareModal(itemId) {
+  reencodeModal = { kind: "compare", itemId, pos: 0, frames: null, error: null };
+  const mine = reencodeModal;
+  renderReencodeModal();
+  try {
+    mine.frames = await get(`/api/reencode/compare?itemId=${encodeURIComponent(itemId)}`);
+  } catch (err) {
+    mine.error = err.message;
+  }
+  if (reencodeModal === mine) renderReencodeModal();
+}
+
+function compareModalHtml(m) {
+  const job = state.reencode.jobs[m.itemId];
+  if (!job || job.state !== "done") return `<div class="modal-empty">Nothing to compare any more.</div>`;
+  const worse = job.gainPercent <= 0;
+  const summary = `
+    <div class="re-compare-summary">
+      <div><span class="hint-text">Original</span><b>${formatSize(job.originalBytes)}</b></div>
+      <div class="arrow">→</div>
+      <div><span class="hint-text">Re-encoded</span><b>${formatSize(job.newBytes)}</b></div>
+      <div><span class="hint-text">Space saved</span>${gainHtml(job.gainPercent)} <span class="hint-text">${formatSize(Math.abs(job.originalBytes - job.newBytes))}</span></div>
+      <div><span class="hint-text">Picture</span><b title="${job.ssim != null ? `SSIM ${job.ssim} (1 = identical)` : ""}">${esc(job.quality || "not measured")}</b></div>
+    </div>`;
+  let viewer;
+  if (m.error) viewer = `<div class="modal-empty warn-text">${esc(m.error)}</div>`;
+  else if (!m.frames) viewer = `<div class="modal-empty"><span class="spin"></span> Taking the same pictures out of both files…</div>`;
+  else {
+    const url = (side) => `/api/reencode/frame/${m.frames.key}/${side}-${m.pos}.png?v=${m.frames.stamp}`;
+    viewer = `<div class="cmp-bar">${positionButtonsHtml(m.frames.positions, m.pos)}</div>${compareViewerHtml(url("source"), url("new"), "Re-encoded")}`;
+  }
+  return `
+    ${summary}
+    ${viewer}
+    <div class="identify-actions re-modal-actions">
+      <span class="hint-text">Both files are on your disk until you decide.</span>
+      <div class="grow"></div>
+      <button class="btn secondary" id="re-cmp-revert" title="Delete the new file">Undo — keep the original</button>
+      ${worse ? "" : `<button class="btn" id="re-cmp-apply" title="Delete the original">Keep the new file</button>`}
+    </div>`;
+}
+
+function renderReencodeModal() {
+  const m = reencodeModal;
+  if (!m) return;
+  const root = document.getElementById("modal-root");
+  const title = m.kind === "trial"
+    ? `Test on “${state.reencode.trial?.fileName || ""}”`
+    : `Compare “${state.items.find((i) => i.id === m.itemId)?.fileName || ""}”`;
+  root.innerHTML = `
+    <div class="modal-backdrop">
+      <div class="modal wide">
+        <div class="modal-head">
+          <span class="title">${esc(title)}</span>
+          <button class="icon-btn" id="modal-close" title="Close">&#10005;</button>
+        </div>
+        <div class="modal-body re-modal-body">${m.kind === "trial" ? trialModalHtml(m) : compareModalHtml(m)}</div>
+      </div>
+    </div>`;
+
+  const on = (selector, handler) => { const el = root.querySelector(selector); if (el) el.onclick = handler; };
+  const guard = (fn) => () => Promise.resolve(fn()).catch((err) => toast(err.message, "err"));
+  on("#modal-close", closeReencodeModal);
+  root.querySelector(".modal-backdrop").onmousedown = (e) => { if (e.target.classList.contains("modal-backdrop")) closeReencodeModal(); };
+  root.querySelectorAll("[data-pos]").forEach((btn) => { btn.onclick = () => { m.pos = Number(btn.dataset.pos); renderReencodeModal(); }; });
+  bindCompareViewer(root);
+
+  if (m.kind === "trial") {
+    const start = async (quality) => {
+      const { groupKey, itemIds } = m;
+      if (quality) state.reencode.tested[groupKey] = quality;
+      closeReencodeModal();
+      await reStart(itemIds, quality);
+    };
+    root.querySelectorAll("[data-level]").forEach((row) => {
+      row.onclick = () => { if (state.reencode.trial?.state === "done") { m.level = row.dataset.level; renderReencodeModal(); } };
+    });
+    on("#re-trial-cancel", guard(async () => { closeReencodeModal(); await post("/api/reencode/trial/cancel"); }));
+    on("#re-trial-close", closeReencodeModal);
+    on("#re-skip", guard(async () => { await post("/api/reencode/trial/cancel"); await start(null); }));
+    on("#re-trial-go", guard(() => start(m.level)));
+    on("#re-trial-again", guard(async () => {
+      await post("/api/reencode/trial/cancel");
+      state.reencode.trial = null;
+      await openTrialModal(m.groupKey, m.itemIds);
+    }));
+  } else {
+    on("#re-cmp-apply", guard(() => reApply([m.itemId])));
+    on("#re-cmp-revert", guard(() => reRevert([m.itemId])));
+  }
+}
+
+// What the top bar says while files are being re-encoded.
+function reencodeProgressText() {
+  const jobs = Object.values(state.reencode.jobs);
+  const active = jobs.find((j) => j.state === "encoding" || j.state === "checking");
+  const waiting = jobs.filter((j) => j.state === "queued").length;
+  if (!active && !waiting) return "";
+  return `Re-encoding${active?.state === "encoding" ? ` ${Math.floor(active.percent)}%` : ""}${waiting ? ` · ${waiting} waiting` : ""}`;
+}
+
 // ---------- Init ------------------------------------------------------------------------------------
 
 function setupNavigation() {
@@ -1660,6 +2437,7 @@ function setupNavigation() {
   } catch (err) {
     toast(`Failed to load: ${err.message}`, "err");
   }
+  await loadReencodeStatus().catch(() => { /* asked again when the tab opens */ });
   connectEvents();
   render();
 })();

@@ -25,6 +25,24 @@ public sealed class AppSettings
 
     /// <summary>Re-download and overwrite subtitle files that already exist.</summary>
     public bool OverwriteExisting { get; set; }
+
+    /// <summary>How the Re-encode tab shrinks videos.</summary>
+    public ReencodeSettings Reencode { get; set; } = new();
+}
+
+public sealed class ReencodeSettings
+{
+    /// <summary>Folder (or file) of an ffmpeg the user wants used instead of the app's or the PATH's.</summary>
+    public string FfmpegPath { get; set; } = "";
+
+    public Reencode.TargetCodec Codec { get; set; } = Subtitall.Core.Reencode.TargetCodec.Hevc;
+
+    public Reencode.QualityLevel Quality { get; set; } = Subtitall.Core.Reencode.QualityLevel.Balanced;
+
+    public Reencode.EncodeSpeed Speed { get; set; } = Subtitall.Core.Reencode.EncodeSpeed.Normal;
+
+    /// <summary>Scale taller videos down to this height; 0 keeps the resolution.</summary>
+    public int MaxHeight { get; set; }
 }
 
 public sealed class ProviderSettings
