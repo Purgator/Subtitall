@@ -85,8 +85,8 @@ Packaging facts (verified 2026-10; do not "fix" these):
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).
 - **Re-encoding** (the Re-encode tab) — `Core/Reencode/` is pure and tested: `VideoInfo` (ffprobe
   JSON), `EncodePlanner` (is a file worth it, ffmpeg arguments, file names, trial maths, quality
-  labels), `FfmpegRunner` (process + parsers), `FfmpegLocator` / `FfmpegDownload` (where ffmpeg is,
-  which build to fetch). `Api/FfmpegService` finds or downloads ffmpeg (`ffmpeg-status` events),
+  labels), `FfmpegRunner` (process + parsers), `FfmpegLocator` / `FfmpegDownload` / `FfmpegPackageManagers` (where
+  ffmpeg is, which build to fetch, which package managers can install it instead). `Api/FfmpegService` finds or downloads ffmpeg (`ffmpeg-status` events),
   `Api/ReencodeService` runs one encode at a time, the trial on excerpts, and keep/undo
   (`reencode-changed`, `reencode-progress`, `reencode-trial` events); endpoints in
   `Api/ReencodeEndpoints.cs`.
@@ -155,12 +155,19 @@ Packaging facts (verified 2026-10; do not "fix" these):
   `n*` one through the GitHub API, which also gives the SHA-256 `digest`), evermeet.cx zips for
   macOS. The first ffmpeg that *runs* wins: on company computers a security policy can refuse to
   start a freshly downloaded exe (seen with Microsoft Defender's "block executables unless they
-  meet a prevalence, age or trusted list criterion" rule) — that must be reported in plain words,
-  never worked around.
+  meet a prevalence, age or trusted list criterion" rule). The install then falls back on the
+  package managers present (`FfmpegPackageManagers`: winget → Scoop → Chocolatey with a UAC
+  confirmation; Homebrew; `pkexec` + apt/dnf/pacman/zypper) — the channels such a policy is
+  meant to let through. Anything beyond that (exclusions, renaming or moving the exe, turning a
+  protection off) is off limits: say what was tried and why it failed, in plain words.
 - Linux and macOS users are offered both ways with the same weight (automatic download, or their
   system's ffmpeg with per-distribution instructions); Windows leads with the one-click install.
 - The trial estimates the whole file from three 8-second excerpts: bytes of video vs. all tracks
-  in the original (ffprobe packet sizes) and the encoded size of the same excerpts. The picture
+  in the original (ffprobe packet sizes) and the encoded size of the same excerpts. The ffprobe
+  interval must have an absolute end (`-read_intervals 30%38`, not `30%+8`): ffprobe starts at
+  the keyframe *before* the excerpt and counts a relative length from there, which measured the
+  wrong seconds and inflated the estimate about fourfold (verified 2026-11 on real files:
+  estimate within ~6 % of the real encode once fixed). The picture
   score is SSIM on those excerpts; its plain-words labels are in `EncodePlanner.QualityLabel`.
 
 ## Testing conventions

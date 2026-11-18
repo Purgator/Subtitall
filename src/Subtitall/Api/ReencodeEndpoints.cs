@@ -31,6 +31,13 @@ public static class ReencodeEndpoints
             return Results.Ok(await ffmpeg.GetStatusAsync(ct));
         });
 
+        // The download the system refuses to start: delete it.
+        api.MapPost("/ffmpeg/remove", async (FfmpegService ffmpeg, CancellationToken ct) =>
+        {
+            ffmpeg.RemoveDownload();
+            return Results.Ok(await ffmpeg.GetStatusAsync(ct));
+        });
+
         // ---- Files -----------------------------------------------------------------------------
         api.MapPost("/analyze", async (ReencodeService reencode, CancellationToken ct) =>
         {

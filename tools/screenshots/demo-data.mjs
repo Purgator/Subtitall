@@ -376,6 +376,7 @@ export function reencodeStatus() {
       state: "ready", os: "windows", canDownload: true, source: "app", version: "8.0",
       path: "C:\\Users\\you\\AppData\\Roaming\\Subtitall\\ffmpeg\\ffmpeg.exe",
       encoders: ["libx265", "libx264", "libsvtav1"], percent: null, downloadedBytes: 0, totalBytes: 0, message: null,
+      blocked: false, hasDownload: true, fallbacks: ["winget (Windows' package manager)"], tried: [],
       installFolder: "C:\\Users\\you\\AppData\\Roaming\\Subtitall\\ffmpeg",
     },
     state: {

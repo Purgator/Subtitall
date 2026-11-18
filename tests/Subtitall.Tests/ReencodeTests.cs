@@ -395,6 +395,69 @@ public class ReencodeTests
         Assert.Null(FfmpegLocator.Find(null, Path.Combine(dir.Path, "none"), [Path.Combine(dir.Path, "half")]));
     }
 
+    [Fact]
+    public void Only_the_package_managers_present_are_fallbacks_in_order_of_preference()
+    {
+        using var dir = new TempDir();
+        var bin = Path.Combine(dir.Path, "bin");
+        dir.CreateFile(Path.Combine("bin", "choco.exe"));
+        dir.CreateFile(Path.Combine("bin", "winget.exe"));
+        dir.CreateFile(Path.Combine("shims", "scoop.cmd")); // Scoop is a script, not a program
+
+        var all = FfmpegPackageManagers.Available("windows", [Path.Combine(dir.Path, "missing"), bin, Path.Combine(dir.Path, "shims")]);
+        Assert.Equal(["winget", "scoop", "choco"], all.Select(a => a.Installer.Name));
+        Assert.Equal(Path.Combine(dir.Path, "shims", "scoop.cmd"), all[1].CommandPath);
+        // Chocolatey needs administrator rights: the user is told a confirmation is coming.
+        Assert.Equal([false, false, true], all.Select(a => a.Installer.Elevated));
+        Assert.Contains("Gyan.FFmpeg", all[0].Installer.Arguments);
+        Assert.Contains("--accept-package-agreements", all[0].Installer.Arguments);
+
+        Assert.Equal(["winget", "choco"], FfmpegPackageManagers.Available("windows", [bin]).Select(a => a.Installer.Name));
+        Assert.Empty(FfmpegPackageManagers.Available("windows", [dir.Path]));
+        // A Windows program is not a command on Linux.
+        Assert.Null(FfmpegPackageManagers.FindCommand("winget", [bin], windows: false));
+    }
+
+    [Fact]
+    public void A_linux_package_manager_needs_the_desktop_password_prompt_too()
+    {
+        using var dir = new TempDir();
+        dir.CreateFile("apt-get");
+        dir.CreateFile("pacman");
+        Assert.Empty(FfmpegPackageManagers.Available("linux", [dir.Path])); // no pkexec: nothing can ask for the password
+
+        dir.CreateFile("pkexec");
+        var available = FfmpegPackageManagers.Available("linux", [dir.Path]);
+
+        Assert.Equal(["apt", "pacman"], available.Select(a => a.Installer.Name));
+        Assert.Equal(Path.Combine(dir.Path, "pkexec"), available[0].CommandPath);
+        Assert.Equal(["apt-get", "install", "-y", "ffmpeg"], available[0].Installer.Arguments);
+        Assert.Equal(["brew"], FfmpegPackageManagers.For("mac").Select(i => i.Name));
+    }
+
+    [Fact]
+    public void Ffmpeg_is_also_looked_for_where_package_managers_put_it()
+    {
+        using var dir = new TempDir();
+        var local = Path.Combine(dir.Path, "Local");
+        var winget = Path.Combine(local, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe", "ffmpeg-8.0-full_build", "bin");
+        Directory.CreateDirectory(winget);
+        Directory.CreateDirectory(Path.Combine(local, "Microsoft", "WinGet", "Packages", "Other.Tool_x", "tool-1.0"));
+
+        var folders = FfmpegPackageManagers.KnownFolders("windows", Path.Combine(dir.Path, "Home"), local, Path.Combine(dir.Path, "ProgramData"));
+
+        Assert.Equal(
+        [
+            Path.Combine(local, "Microsoft", "WinGet", "Links"),
+            winget,
+            Path.Combine(dir.Path, "Home", "scoop", "apps", "ffmpeg", "current", "bin"),
+            Path.Combine(dir.Path, "Home", "scoop", "shims"),
+            Path.Combine(dir.Path, "ProgramData", "chocolatey", "bin"),
+        ], folders);
+        Assert.Contains("/opt/homebrew/bin", FfmpegPackageManagers.KnownFolders("mac", "/Users/me", "", ""));
+        Assert.DoesNotContain("/opt/homebrew/bin", FfmpegPackageManagers.KnownFolders("linux", "/home/me", "", ""));
+    }
+
     // ---- Settings ------------------------------------------------------------------------------
 
     [Fact]

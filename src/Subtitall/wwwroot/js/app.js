@@ -1810,12 +1810,28 @@ function ffmpegDownloadHtml(f) {
       <div class="re-progress big"><div style="width:${f.state === "installing" ? 100 : f.percent || 0}%"></div></div>
       <div class="re-install-line">
         <span><span class="spin"></span> ${esc(f.message || "Working…")} ${amount && f.state === "downloading" ? `<span class="hint-text">${amount}</span>` : ""}</span>
-        ${f.state === "downloading" ? `<button class="btn small secondary" data-re="ffmpeg-cancel">Cancel</button>` : ""}
+        <button class="btn small secondary" data-re="ffmpeg-cancel">Cancel</button>
       </div>`;
   }
+  if (f.state !== "error")
+    return `<button class="btn" data-re="ffmpeg-install">Download and install ffmpeg</button>`;
   return `
-    ${f.state === "error" && f.message ? `<div class="warn-text" style="margin-bottom:10px">${esc(f.message)}</div>` : ""}
-    <button class="btn" data-re="ffmpeg-install">${f.state === "error" ? "Try again" : "Download and install ffmpeg"}</button>`;
+    <div class="re-failure">
+      <div class="warn-text">${esc(f.message || "ffmpeg could not be installed.")}</div>
+      ${f.tried?.length ? `<ul>${f.tried.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+      ${f.blocked ? `
+        <p><b>What you can do:</b></p>
+        <ul>
+          <li>If ${f.os === "windows" ? "Windows Security" : "your system"} showed a notification about a blocked program with an <i>Allow</i> or <i>Unblock</i> button, click it, then click <i>Check again</i>.</li>
+          <li>Wait and click <i>Check again</i> later: some protections only distrust programs they have never seen, and let them run after a while.</li>
+          <li>Ask your administrator to allow ffmpeg, or install it yourself (below).</li>
+        </ul>` : ""}
+    </div>
+    <div class="re-own-row">
+      <button class="btn" data-re="ffmpeg-install">Try again</button>
+      ${f.hasDownload ? `<button class="btn secondary" data-re="ffmpeg-recheck">Check again</button>
+        <button class="btn secondary" data-re="ffmpeg-remove" title="Deletes ffmpeg.exe and ffprobe.exe from Subtitall's folder">Delete the blocked download</button>` : ""}
+    </div>`;
 }
 
 function ffmpegOwnHtml(f) {
@@ -1864,6 +1880,7 @@ function renderFfmpegGuide(main) {
       <li>Subtitall downloads ${what}.</li>
       <li>It checks that the download is intact${f.os === "mac" ? "" : " (SHA-256 checksum)"}.</li>
       <li>It unpacks <code>ffmpeg</code> and <code>ffprobe</code> into its own folder, <code>${folder}</code>. Nothing else on your computer is changed and no administrator rights are needed.</li>
+      ${f.fallbacks?.length ? `<li>Only if that download cannot be used — some company computers refuse to start a freshly downloaded program — Subtitall installs ffmpeg with what your computer already has: ${f.fallbacks.map((x) => `<b>${esc(x)}</b>`).join(", then ")}.</li>` : ""}
     </ol>
     ${f.canDownload ? ffmpegDownloadHtml(f) : `<div class="warn-text">No ready-made ffmpeg exists for this kind of computer — install it yourself.</div>`}`;
 
@@ -1921,6 +1938,7 @@ function renderFfmpegGuide(main) {
     try {
       if (action === "ffmpeg-install") await post("/api/reencode/ffmpeg/install");
       else if (action === "ffmpeg-cancel") await post("/api/reencode/ffmpeg/cancel");
+      else if (action === "ffmpeg-remove") { state.reencode.ffmpeg = await post("/api/reencode/ffmpeg/remove"); render(); }
       else if (action === "ffmpeg-recheck") {
         const input = main.querySelector("#re-ffmpeg-path");
         if (input && input.value.trim() !== reSettings().ffmpegPath) await saveReencodeSettings({ ffmpegPath: input.value.trim() });
@@ -2307,6 +2325,10 @@ function trialModalHtml(m) {
   return `
     <div class="hint-text re-trial-intro">Short excerpts of this file were encoded at three quality levels. Sizes are estimates for the whole file; the picture was measured against the original.</div>
     ${table}
+    ${!levels.some((l) => l.gainPercent > 0)
+      ? `<div class="warn-text re-trial-warning">Re-encoding would not make this file smaller at any level: it is already tightly compressed. Better leave these files as they are.</div>`
+      : chosen && chosen.gainPercent <= 0
+        ? `<div class="warn-text re-trial-warning">At this level the new file would be bigger than the original — pick a smaller one.</div>` : ""}
     ${chosen ? `
       <div class="cmp-bar">${positionButtonsHtml(t.positions, pos)}</div>
       ${compareViewerHtml(frame("source"), frame(chosen.quality), RE_LEVELS[chosen.quality][0])}` : ""}
@@ -2314,7 +2336,7 @@ function trialModalHtml(m) {
       <span class="linkish hint-text" id="re-trial-again">Run the test again</span>
       <div class="grow"></div>
       <button class="btn secondary" id="re-trial-close">Close</button>
-      <button class="btn" id="re-trial-go" ${chosen ? "" : "disabled"}>Re-encode ${n} file${n === 1 ? "" : "s"} — ${chosen ? RE_LEVELS[chosen.quality][0] : ""}</button>
+      <button class="btn ${chosen && chosen.gainPercent <= 0 ? "secondary" : ""}" id="re-trial-go" ${chosen ? "" : "disabled"}>Re-encode ${n} file${n === 1 ? "" : "s"} — ${chosen ? RE_LEVELS[chosen.quality][0] : ""}</button>
     </div>`;
 }
 
