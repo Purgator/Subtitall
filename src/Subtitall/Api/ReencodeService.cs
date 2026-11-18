@@ -676,7 +676,9 @@ public sealed class ReencodeService
             Advance("Measuring the original…");
             var packets = await FfmpegRunner.RunAsync(tools.Ffprobe,
             [
-                "-v", "error", "-read_intervals", $"{EncodePlanner.Seconds(starts[i])}%+{EncodePlanner.Seconds(length)}",
+                // An absolute end: ffprobe starts at the keyframe before the excerpt, and a relative
+                // length ("%+8") would be counted from there — ending before the excerpt is over.
+                "-v", "error", "-read_intervals", $"{EncodePlanner.Seconds(starts[i])}%{EncodePlanner.Seconds(starts[i] + length)}",
                 "-show_entries", "packet=stream_index,pts_time,size", "-of", "csv=p=0", item.Path,
             ], ct);
             var (video, all) = FfmpegRunner.SumPackets(packets.StdOut, info.VideoStreamIndex, starts[i], length);
