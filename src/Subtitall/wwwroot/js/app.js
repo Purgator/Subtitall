@@ -61,6 +61,15 @@ const state = {
     showOwn: false,
     statusError: null,
   },
+  // sync view
+  sync: {
+    itemId: null,         // the video being checked
+    data: null,           // /api/sync/{itemId}: its subtitles and what the comparison found
+    error: null,
+    open: {},             // subtitle path -> details shown
+    started: {},          // itemId -> a comparison was started automatically on this visit
+    busy: {},             // itemId -> { percent, step } while a comparison runs
+  },
 };
 
 // ---------- Utilities ----------------------------------------------------------
@@ -183,8 +192,26 @@ function connectEvents() {
       case "ffmpeg-status": {
         const was = state.reencode.ffmpeg?.state;
         state.reencode.ffmpeg = data;
-        if (state.view === "reencode") render();
-        if (data.state === "ready" && was && was !== "ready") toast(`ffmpeg ${data.version} is installed — you can re-encode now`, "ok", 6000);
+        if (state.view === "reencode" || state.view === "sync") render();
+        if (data.state === "ready" && was && was !== "ready") toast(`ffmpeg ${data.version} is installed and ready`, "ok", 6000);
+        break;
+      }
+      case "sync-changed":
+        if (data.state === "running") state.sync.busy[data.itemId] = { percent: data.percent, step: data.step };
+        else delete state.sync.busy[data.itemId];
+        if (data.itemId === state.sync.itemId) state.sync.data = data;
+        if (state.view === "sync") render(); else renderTopbar();
+        break;
+      case "sync-progress": {
+        state.sync.busy[data.itemId] = { percent: data.percent, step: data.step };
+        if (state.sync.data?.itemId === data.itemId) Object.assign(state.sync.data, { percent: data.percent, step: data.step });
+        renderTopbar();
+        if (state.view === "sync" && data.itemId === state.sync.itemId) {
+          const bar = document.getElementById("sync-bar");
+          if (bar) bar.style.width = `${data.percent}%`;
+          const step = document.getElementById("sync-step");
+          if (step) step.textContent = data.step;
+        }
         break;
       }
       case "reencode-changed": {
@@ -286,7 +313,15 @@ function setupDragDrop() {
       return;
     }
     try {
-      const result = await post("/api/library/add", { paths });
+      // Subtitle files dropped on the Sync tab join the comparison of the video it shows.
+      const subtitles = state.view === "sync" && state.sync.itemId ? paths.filter(isSubtitlePath) : [];
+      if (subtitles.length) {
+        const { added } = await post("/api/sync/add", { itemId: state.sync.itemId, paths: subtitles });
+        toast(added > 0 ? `Added ${added} subtitle${added > 1 ? "s" : ""} to compare` : "Already in the comparison", added > 0 ? "ok" : "info");
+      }
+      const others = paths.filter((p) => !subtitles.includes(p));
+      if (!others.length) return;
+      const result = await post("/api/library/add", { paths: others });
       toast(result.added > 0 ? `Added ${result.added} video${result.added > 1 ? "s" : ""}` : "No new videos found", result.added > 0 ? "ok" : "info");
     } catch (err) {
       toast(`Could not add files: ${err.message}`, "err");
@@ -308,9 +343,10 @@ function renderTopbar() {
   renderUpdateStatus();
   const progress = document.getElementById("top-progress");
   const encoding = reencodeProgressText();
-  progress.hidden = !state.searching && !encoding;
+  const listening = syncProgressText();
+  progress.hidden = !state.searching && !encoding && !listening;
   document.getElementById("top-progress-text").textContent =
-    [state.searching ? `Searching ${state.progress.done}/${state.progress.total}` : "", encoding].filter(Boolean).join(" · ");
+    [state.searching ? `Searching ${state.progress.done}/${state.progress.total}` : "", encoding, listening].filter(Boolean).join(" · ");
 }
 
 function renderMain() {
@@ -320,6 +356,7 @@ function renderMain() {
   main.onchange = null;
   if (state.view === "files") renderFilesView(main);
   else if (state.view === "reencode") renderReencodeView(main);
+  else if (state.view === "sync") renderSyncView(main);
   else if (state.view === "rename") renderRenameView(main);
   else if (state.view === "shows") renderShowsView(main);
   else renderSettingsView(main);
@@ -1868,7 +1905,7 @@ function ffmpegOwnHtml(f) {
     ${path}`;
 }
 
-function renderFfmpegGuide(main) {
+function renderFfmpegGuide(main, purpose = "Re-encoding") {
   const f = state.reencode.ffmpeg;
   const busy = f.state === "downloading" || f.state === "installing";
   const folder = esc(f.installFolder);
@@ -1887,7 +1924,7 @@ function renderFfmpegGuide(main) {
   const intro = `
     <div class="re-guide-head">
       <h2>One thing to set up first</h2>
-      <p>Re-encoding is done by <b>ffmpeg</b>, a free and open-source video tool that Subtitall does not ship with. It is installed once, then this tab just works.</p>
+      <p>${purpose} is done by <b>ffmpeg</b>, a free and open-source video tool that Subtitall does not ship with. It is installed once, then this tab just works.</p>
     </div>`;
 
   if (f.os === "windows") {
@@ -2443,11 +2480,260 @@ function reencodeProgressText() {
   return `Re-encoding${active?.state === "encoding" ? ` ${Math.floor(active.percent)}%` : ""}${waiting ? ` · ${waiting} waiting` : ""}`;
 }
 
+// ---------- Sync view ------------------------------------------------------------------------------------
+// Compares the subtitles of a video with its audio: which ones follow the speech, and how to fix the others.
+
+const SYNC_BADGES = {
+  inSync: { text: "In sync", cls: "ok" },
+  shift: { text: "Needs a shift", cls: "warn" },
+  rescale: { text: "Needs stretching", cls: "warn" },
+  differentCut: { text: "Another cut", cls: "bad" },
+  unclear: { text: "Can't tell", cls: "dim" },
+  unreadable: { text: "Nothing to compare", cls: "dim" },
+};
+
+const isSubtitlePath = (path) => /\.(srt|vtt|ass|ssa)$/i.test(path);
+const percentText = (x) => `${Math.round((x || 0) * 100)}%`;
+const signed = (seconds) => `${seconds > 0 ? "+" : seconds < 0 ? "−" : ""}${Math.abs(seconds).toFixed(Math.abs(seconds) < 10 ? 1 : 0)} s`;
+
+// Guards against a slow answer for another video landing after the user moved on.
+let syncLoadToken = 0;
+
+async function loadSync(itemId) {
+  const s = state.sync;
+  const token = ++syncLoadToken;
+  try {
+    const data = await get(`/api/sync/${itemId}`);
+    if (token !== syncLoadToken || s.itemId !== itemId) return;
+    s.error = null;
+    s.data = data;
+    // Subtitles nobody has looked at yet (first visit, or a new file next to the video): compare them.
+    const unseen = data.candidates.some((c) => !c.analyzed);
+    if (data.state === "idle" && unseen && !s.started[itemId]) {
+      s.started[itemId] = true;
+      await post("/api/sync/analyze", { itemId });
+    }
+  } catch (err) {
+    if (token === syncLoadToken) s.error = err.message;
+  }
+  if (state.view === "sync") render();
+}
+
+function syncProgressText() {
+  const busy = Object.values(state.sync.busy)[0];
+  return busy ? `Listening ${Math.floor(busy.percent)}%` : "";
+}
+
+function syncSummaryHtml(d) {
+  if (d.state === "running") {
+    return `
+      <div class="re-banner sync-running">
+        <div class="re-progress big"><div id="sync-bar" style="width:${d.percent || 0}%"></div></div>
+        <div class="re-install-line">
+          <span><span class="spin"></span> <span id="sync-step">${esc(d.step || "Working…")}</span></span>
+          <button class="btn small secondary" data-sync="cancel">Stop</button>
+        </div>
+      </div>`;
+  }
+  if (d.state === "failed")
+    return `<div class="re-banner warn">${esc(d.error || "The comparison failed.")} <span class="linkish" data-sync="analyze">Try again</span></div>`;
+  if (!d.candidates.length)
+    return `<div class="re-banner">No subtitle file sits next to this video. Add the subtitles you want to compare — they can come from anywhere.</div>`;
+
+  const best = d.candidates.filter((c) => c.best);
+  const analysed = d.candidates.filter((c) => c.analysis).length;
+  const minutes = Math.round((d.durationSeconds || 0) / 60);
+  const facts = d.durationSeconds
+    ? `<span class="hint-text">Compared ${analysed} subtitle${analysed === 1 ? "" : "s"} with ${minutes} min of audio, speech heard ${d.speechPercent}% of the time.</span>`
+    : "";
+  if (!best.length)
+    return `<div class="re-banner warn">None of these subtitles matches this video's audio well enough to trust. Try other subtitle files. ${facts}</div>`;
+  const top = best[0];
+  const a = top.analysis;
+  const what = a.verdict === "inSync" ? "it follows the speech" : `${esc(a.headline.charAt(0).toLowerCase() + a.headline.slice(1))}. ${esc(a.advice)}`;
+  return `<div class="re-banner totals"><span><b>${esc(top.name)}</b> is the best match: ${what}. ${facts}</span></div>`;
+}
+
+function syncRowHtml(c, rank) {
+  const s = state.sync;
+  const a = c.analysis;
+  const badge = c.error
+    ? { text: "Can't read", cls: "bad" }
+    : a ? SYNC_BADGES[a.verdict] : { text: "Waiting…", cls: "dim" };
+  const lang = c.language ? `<span class="sync-chip">${esc(c.language)}</span>` : "";
+  const added = c.source === "added" ? `<span class="sync-chip alt" title="${esc(c.folder || "")}">added</span>` : "";
+
+  let note = "";
+  if (c.error) note = esc(c.error);
+  else if (a) note = esc(a.headline) + (a.advice ? ` — <b>${esc(a.advice)}</b>` : "");
+
+  let meter = "";
+  if (a && a.verdict !== "unreadable") {
+    const shown = a.fix ? a.fixedScore : a.currentScore;
+    const coverage = a.fix ? `${percentText(a.currentCoverage)} → <b>${percentText(a.fixedCoverage)}</b>` : `<b>${percentText(a.fixedCoverage)}</b>`;
+    meter = `
+      <div class="sync-meter" title="How well the moments the subtitles are shown match the moments people speak (${a.speechCues} spoken subtitles)">
+        <div class="sync-bar"><div style="width:${Math.max(0, Math.min(100, shown * 125))}%"></div></div>
+        <span class="hint-text">Speech under the subtitles: ${coverage}${a.confidence ? ` · confidence ${esc(a.confidence)}` : ""}</span>
+      </div>`;
+  }
+
+  const actions = [];
+  if (c.action === "fix")
+    actions.push(`<button class="btn small" data-sync="apply" data-path="${esc(c.path)}" title="Writes the corrected subtitle. ${c.replaces ? `It replaces ${esc(c.replaces)}, which is kept as a .bak file.` : "The original is kept as a .bak file."}">${c.source === "added" ? (c.replaces ? "Fix and replace " + esc(c.replaces) : "Fix and save next to the video") : "Fix it"}</button>`);
+  if (c.action === "use")
+    actions.push(`<button class="btn small" data-sync="apply" data-path="${esc(c.path)}" title="Copies it next to the video under its name${c.replaces ? `, replacing ${esc(c.replaces)} (kept as a .bak file)` : ""}">${c.replaces ? "Use instead of " + esc(c.replaces) : "Use for this video"}</button>`);
+  if (c.canUndo)
+    actions.push(`<button class="btn small secondary" data-sync="undo" data-path="${esc(c.path)}" title="Puts the original back">Undo</button>`);
+  if (c.source === "added")
+    actions.push(`<button class="icon-btn" data-sync="remove" data-path="${esc(c.path)}" title="Remove from the comparison">&#10005;</button>`);
+  if (a && a.segments?.length)
+    actions.push(`<button class="icon-btn" data-sync="details" data-path="${esc(c.path)}" title="Where it is off, along the video">${s.open[c.path] ? "▴" : "▾"}</button>`);
+
+  return `
+    <div class="sync-row${c.best ? " best" : ""}">
+      <div class="sync-rank">${a && rank ? `#${rank}` : ""}</div>
+      <div class="sync-main">
+        <div class="sync-file"><span class="sync-name" title="${esc(c.path)}">${esc(c.name)}</span> ${lang} ${added} ${c.best ? `<span class="badge-rec">best match</span>` : ""}</div>
+        <div class="sync-note">${note}</div>
+        ${meter}
+      </div>
+      <div class="sync-verdict"><span class="sync-badge ${badge.cls}">${badge.text}</span></div>
+      <div class="sync-actions">${actions.join("")}</div>
+      ${s.open[c.path] && a ? syncDetailsHtml(a) : ""}
+    </div>`;
+}
+
+function syncDetailsHtml(a) {
+  const segments = a.segments.map((seg) => {
+    const text = !seg.valid ? "no clear match" : `${signed(seg.shift)}`;
+    return `<span class="sync-seg${seg.outlier ? " out" : ""}${seg.valid ? "" : " none"}" title="Match ${percentText(seg.score)}">
+      <span class="hint-text">${formatClock(seg.time)}</span> ${text}</span>`;
+  }).join("");
+  const fix = a.fix
+    ? `Fix: <b>× ${a.fix.scale.toFixed(5)}</b> then <b>${signed(a.fix.offset)}</b>${a.fix.rate ? ` (${esc(a.fix.rate)})` : ""}.`
+    : "No fix needed.";
+  return `
+    <div class="sync-details">
+      <div class="hint-text">Shift each part of the video needs, from start to end (positive = the subtitle appears too early):</div>
+      <div class="sync-segs">${segments}</div>
+      <div class="hint-text">${fix} Off by ${signed(a.startError)} at the start and ${signed(a.endError)} at the end. Overall match ${percentText(a.currentScore)}${a.fix ? ` → ${percentText(a.fixedScore)}` : ""}.</div>
+    </div>`;
+}
+
+function renderSyncView(main) {
+  const s = state.sync;
+  const r = state.reencode;
+  if (!r.ffmpeg) {
+    main.innerHTML = r.statusError
+      ? `<div class="panel-empty warn-text">${esc(r.statusError)}</div>`
+      : `<div class="panel-empty"><span class="spin"></span> Checking for ffmpeg…</div>`;
+    if (!r.statusError)
+      loadReencodeStatus().catch((err) => { r.statusError = err.message; }).finally(() => { if (state.view === "sync") render(); });
+    return;
+  }
+  if (r.ffmpeg.state !== "ready") { renderFfmpegGuide(main, "Listening to your videos"); return; }
+  if (!state.items.length) {
+    main.innerHTML = `<div class="dropzone"><div class="title">No video to check yet</div><div>Add videos in the Files tab (or drop them here): Subtitall then tells you whether their subtitles follow the speech.</div></div>`;
+    return;
+  }
+  if (!state.items.some((i) => i.id === s.itemId)) { s.itemId = state.items[0].id; s.data = null; }
+
+  const d = s.data && s.data.itemId === s.itemId ? s.data : null;
+  if (!d && !s.error) loadSync(s.itemId);
+
+  const videos = state.items.map((i) => `<option value="${i.id}"${i.id === s.itemId ? " selected" : ""}>${esc(i.fileName)}</option>`).join("");
+  const tracks = d?.audioTracks?.length > 1
+    ? `<label>Audio <select class="input" id="sync-audio">${d.audioTracks.map((t) => `<option value="${t.index}"${t.index === d.audioIndex ? " selected" : ""}>${esc(t.label)}</option>`).join("")}</select></label>`
+    : "";
+  const running = d?.state === "running";
+
+  let body;
+  if (s.error) body = `<div class="re-banner warn">${esc(s.error)} <span class="linkish" data-sync="reload">Try again</span></div>`;
+  else if (!d) body = `<div class="panel-empty"><span class="spin"></span> Looking at this video…</div>`;
+  else {
+    let rank = 0;
+    const rows = d.candidates.map((c) => syncRowHtml(c, c.analysis && c.analysis.verdict !== "unreadable" ? ++rank : 0)).join("");
+    body = `${syncSummaryHtml(d)}${d.candidates.length ? `<div class="card sync-list">${rows}</div>` : ""}`;
+  }
+
+  main.innerHTML = `
+    <div class="re-options sync-head">
+      <label>Video <select class="input" id="sync-video">${videos}</select></label>
+      ${tracks}
+      <span class="grow"></span>
+      <button class="btn secondary" data-sync="add">Add subtitle files…</button>
+      <button class="btn secondary" data-sync="analyze"${running ? " disabled" : ""}>Compare again</button>
+    </div>
+    <details class="sync-how"><summary>How does this work?</summary>
+      <p>Subtitall listens to the video's audio with ffmpeg and finds where people speak. It then slides each subtitle along that speech until the two agree — one shift for the whole file, then the same check on each part of the video, to tell a plain shift from a frame-rate mismatch (the subtitle drifts) or from a subtitle made for another cut.</p>
+      <p>No file leaves your computer. Fixing a subtitle writes the corrected file and keeps the original next to it as <code>.bak</code>; <i>Undo</i> puts it back. Subtitles the app cannot tell anything about are marked <i>Can't tell</i> rather than guessed.</p>
+    </details>
+    ${body}`;
+
+  main.onchange = (e) => {
+    if (e.target.id === "sync-video") {
+      s.itemId = e.target.value;
+      s.data = null;
+      s.error = null;
+      s.open = {};
+      render();
+    } else if (e.target.id === "sync-audio") {
+      post("/api/sync/analyze", { itemId: s.itemId, audioIndex: Number(e.target.value) }).catch((err) => toast(err.message, "err"));
+    }
+  };
+  main.onclick = (e) => {
+    const el = e.target.closest("[data-sync]");
+    if (el) syncAction(el.dataset.sync, el.dataset).catch((err) => toast(err.message, "err"));
+  };
+}
+
+async function syncAction(action, data) {
+  const s = state.sync;
+  const itemId = s.itemId;
+  switch (action) {
+    case "analyze": s.error = null; await post("/api/sync/analyze", { itemId }); break;
+    case "cancel": await post("/api/sync/cancel", { itemId }); break;
+    case "reload": s.error = null; s.data = null; render(); break;
+    case "details": s.open[data.path] = !s.open[data.path]; render(); break;
+    case "remove": await post("/api/sync/remove", { itemId, path: data.path }); break;
+    case "add": await syncBrowse(); break;
+    case "apply": {
+      const result = await post("/api/sync/apply", { itemId, path: data.path });
+      toast(result.message, "ok", 6000);
+      break;
+    }
+    case "undo": {
+      const result = await post("/api/sync/undo", { itemId, path: data.path });
+      toast(result.message, "ok");
+      break;
+    }
+  }
+}
+
+async function syncBrowse() {
+  const itemId = state.sync.itemId;
+  let added;
+  if (state.meta.isElectron) {
+    ({ added } = await post("/api/sync/browse", { itemId }));
+  } else {
+    const path = prompt("Desktop dialogs are unavailable in the browser.\nEnter the path of a subtitle file or of a folder of subtitles:");
+    if (!path) return;
+    ({ added } = await post("/api/sync/add", { itemId, paths: [path] }));
+  }
+  if (added > 0) toast(`Added ${added} subtitle${added === 1 ? "" : "s"} to compare`, "ok");
+}
+
 // ---------- Init ------------------------------------------------------------------------------------
 
 function setupNavigation() {
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.onclick = () => { state.view = tab.dataset.view; render(); };
+    tab.onclick = () => {
+      state.view = tab.dataset.view;
+      // The folder may have changed since the last visit (a subtitle downloaded, one removed).
+      if (state.view === "sync") Object.assign(state.sync, { data: null, error: null, started: {} });
+      render();
+    };
   });
 }
 

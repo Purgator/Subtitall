@@ -81,8 +81,15 @@ Packaging facts (verified 2026-10; do not "fix" these):
   a used-up download quota is a `QuotaExceededException` (tracked in `ProviderHealth`, never a
   circuit-breaker failure — searching still works). Enums serialize as camelCase strings.
 - `src/Subtitall/wwwroot/` — the UI (`index.html`, `css/app.css`, `js/app.js`): a simple tabbed
-  layout (Files / Rename / Shows / Re-encode / Settings). Keep it simple and intuitive; do NOT style it after an IDE
+  layout (Files / Rename / Shows / Sync / Re-encode / Settings). Keep it simple and intuitive; do NOT style it after an IDE
   and do not describe the app as "VS Code-like" anywhere (user's explicit request).
+- **Sync** (the Sync tab) — `Core/Sync/` is pure and tested on synthetic dialogue: `SubtitleParser` (SRT/VTT/ASS cues;
+  sound descriptions, songs and typeset signs are not "speech cues"), `SubtitleRetimer` (rewrites times in place, `new = scale × old + offset`),
+  `FrameEnergy` + `SpeechDetector` (8 kHz mono PCM → loudness per 20 ms → speech yes/no: loud above the *local* floor and moving at syllable
+  rhythm; no model, no dependency), `Fft`, `SyncAnalyzer` (the alignment), `AudioExtractor` (ffmpeg → PCM streamed, plus `AudioTrack`).
+  `Api/SyncService` listens to a video once (speech cached per file + track), compares every candidate (companion files + files the user
+  added), ranks them (`SyncRanking`) and applies / undoes fixes; endpoints in `Api/SyncEndpoints.cs`
+  (`sync-changed` / `sync-progress` events).
 - **Re-encoding** (the Re-encode tab) — `Core/Reencode/` is pure and tested: `VideoInfo` (ffprobe
   JSON), `EncodePlanner` (is a file worth it, ffmpeg arguments, file names, trial maths, quality
   labels), `FfmpegRunner` (process + parsers), `FfmpegLocator` / `FfmpegDownload` / `FfmpegPackageManagers` (where
@@ -137,6 +144,31 @@ Packaging facts (verified 2026-10; do not "fix" these):
   never detect a show two different ways — both go through `ShowDetectionService` +
   `EpisodeGuesser` (via `MediaDetectionService`). When in doubt, ask the user (candidate list),
   don't pick silently; a user's show pick or season override always wins.
+
+## Sync facts (do not "fix" these)
+
+- **How a subtitle is judged.** Cues → a 0/1 mask on the 20 ms frame grid, speech → a 0/1 signal; an FFT cross-correlation (±120 s)
+  gives the shift of the whole file. Then each ~6-minute stretch is aligned on its own (±10 s, ±60 s for a stretch that found nothing close
+  — that is how a different cut shows up) and a line is fitted through the leftover offsets: flat = a plain shift; a slope worth ≥ 0.4 s over
+  the video = a frame-rate stretch (snapped to 23.976/24/25/29.97/30 when within 0.0004); stretches that agree with neither = *DifferentCut*.
+  Stretches are kept ≥ 60 s away from both ends of the audio (a stretch there cannot be shifted past the edge: it hid small drifts).
+- **Block-against-block correlation is biased**: cues usually outlast the speech, which leaves a plateau of up to a second where the
+  score does not change, and the peak lands anywhere in it. So the result is refined on the *cue starts* (subtitle authors time those to the
+  first word) against the speech *onsets* (`AlignStarts`, ±1.5 s, only when the onsets line up clearly). Do not drop that step: without it
+  real subtitles read 0.5–1 s off.
+- **A stretch is located by its plain cross-covariance, not by an energy-normalised score**: normalising each lag by the speech energy of
+  its own window pulls the peak toward quiet windows by up to a sentence (verified on TTS speech). The reported score is the true NCC.
+- **Scores are heuristics tuned on real speech** (Windows SAPI voices over pink noise, 26 minutes): true matches score 0.45–0.75, unrelated
+  subtitles ≤ 0.2 on a long video — but a 3-minute clip gives chance scores of 0.45, so short videos are judged less reliably. The *Can't tell* gate
+  (score < 0.10, or dominance < 1.3 with score < 0.20, or fewer than 2 clear stretches) exists so a fix is never offered on a coincidence.
+  A rival alignment counts only when ≥ 8 s from the best one (`ApartSeconds`): a sentence matches almost as well a second off.
+- **Fixes keep the original**: `name.srt.bak` is written once (a second fix never overwrites the true original); *Undo* restores it byte for
+  byte, or deletes a file this app created. Undo state lives in memory, but a `.bak` on disk also enables *Undo* after a restart.
+  Output is UTF-8 (BOM kept if the file had one); a subtitle added from elsewhere is saved as `video.<lang>.<ext>` (language from its file
+  name, else the first language of the settings).
+- **ffmpeg is the Re-encode tab's** (same locator, same guide, same download): nothing Sync-specific to install. The audio is decoded to
+  8 kHz mono with a 150 Hz–3.5 kHz band-pass, at below-normal priority, and only the loudness per frame is kept.
+- MicroDVD / VobSub `.sub` files are listed but not read ("cannot be read yet").
 
 ## Re-encode facts (do not "fix" these)
 

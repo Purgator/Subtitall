@@ -3,7 +3,7 @@
 [![Latest release](https://img.shields.io/github/v/release/Purgator/Subtitall)](https://github.com/Purgator/Subtitall/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming and a re-encoder that shrinks your videos without visible loss.
+Find and download subtitles for your movies, TV shows and anime — a simple, lightweight desktop app with smart episode renaming and a sync checker that listens to the audio to tell which subtitle really fits, and a re-encoder that shrinks your videos without visible loss.
 
 ![The Files tab during a search: one language chip per subtitle, green when saved, red when nothing was found, with the detected show and episode next to each file](docs/files.png)
 
@@ -21,6 +21,10 @@ Inspired by [Subber](https://github.com/noembryo/Subber).
 ![The Re-encode tab: files grouped by show with their video format, two episodes already re-encoded with their old and new size, the space saved and a quality label, a third one in progress](docs/reencode.png)
 
 Shrink a whole season in a few clicks: the old and new size of each file, the space saved, and nothing deleted until you say so.
+
+![The Sync tab: five subtitles of one episode ranked by how well they follow the speech, one in sync, others needing a shift, a stretch, or made for another cut, with the Fix buttons and the offset along the video of the one that drifts](docs/sync.png)
+
+Know which subtitle fits before you press play: every subtitle of a video is compared with its audio, ranked, and fixed when it only needs moving.
 
 - 🎬 **Link videos your way** — drag & drop files or folders anywhere in the window, or use the Add buttons. Folders are scanned recursively.
 - 🧠 **Smart filename parsing** — show title, `S01E02` / `1x02` / `E02` / anime absolute numbering, year and release group are detected automatically, including season markers written into the title (`Show The Final Season - 15`, `Show Season 3 - 05`, `Show 2nd Season - 07`) and numbered specials (`Show OVA 2`, `Show - Special 3` → season 0).
@@ -40,6 +44,11 @@ Shrink a whole season in a few clicks: the old and new size of each file, the sp
 - ✏️ **Episode renaming** — the Rename tab lists your files grouped by detected show, each group with its own *Change show…* button and a season picker per season of files, previews `Show - S01E02 - Title.mkv` names from the show's episode list, and renames the ones you confirm. Results from both metadata sources are merged; if one has no episode list, the other fills in. Subtitles sitting next to the videos are renamed too.
 - 📺 **Shows tab** — every show your files were matched to, with its poster, summary, genres, status, network, rating, official site and trailer (trailers come from TMDB), the full episode list in viewing order with the file that covers each episode, and **what's missing**: aired episodes you have no file for, season by season (episodes that haven't aired yet are listed separately, with the next air date).
 - 🇯🇵 **Anime-friendly** — alternate titles and acronyms are understood: files named `Shingeki no Kyojin` or `SnK` match *Attack on Titan* for both renaming and subtitle search, and absolute episode numbers (`- 59`) map onto the right season.
+- ⏱️ **Check the sync** — the Sync tab picks a video and compares every subtitle it has — the ones next to the video, and any you add (button, or drop the files on the tab) — with what is said in the audio. No model, no account, nothing leaves your computer: ffmpeg decodes the audio once (a few seconds for an episode), Subtitall finds where people speak and slides each subtitle along that speech.
+  - **A verdict per subtitle** — *In sync* (within 0.3 s), *Needs a shift* ("appears 3.6 s too early — delay it by 3.6 s"), *Needs stretching* (the offset grows along the video: a 25 / 24 / 23.976 fps mismatch — the tab names it and gives the stretch and the shift), *Another cut* (no single shift fits: an intro, ads or an extended edition — no fix is offered), or *Can't tell* when there is too little speech or the subtitle does not belong to this video. Details show the shift each part of the video needs, so you see a drift instead of taking it on faith.
+  - **Ranked** — candidates are ordered by how well they follow the speech once fixed, a subtitle that needs nothing ahead of one that needs a shift, ahead of one that needs a stretch; the best of each language is marked. Downloaded subtitles, the ones next to the videos and files you add from anywhere are compared on equal terms.
+  - **Fix without risk** — *Fix it* writes the corrected file (SRT, WebVTT and ASS keep their text and styling; only the times move) and keeps the original as `name.srt.bak`; *Undo* puts it back, byte for byte. A subtitle added from elsewhere is saved next to the video as `video.<lang>.srt` (a file it replaces is kept as `.bak` too). A fix is only offered when the match is clear; otherwise the tab says *Can't tell* rather than guessing.
+  - **How well can it hear?** — speech is found from how loud and how rhythmic the audio is (no AI model, pure C#), so it works whatever the language, and a subtitle in French on an English soundtrack is judged just as well. Music, effects and a commentary track can fool it: pick another audio track when the video has several, and treat *low* confidence as a hint. Sound descriptions (`[door slams]`) and song lines (♪) are left out of the comparison.
 - 🗜️ **Re-encode to save space** — the Re-encode tab turns your videos into H.265 (or AV1, or H.264) with settings chosen for you: no bitrate, no jargon, three quality levels that all aim at "you can't tell the difference".
   - **Smart about what to touch** — each file's format is read first; videos already in H.265/AV1, already small for their resolution, or in HDR are left unticked, with the reason. Only the picture is re-encoded: sound, subtitles, fonts and chapters are copied untouched, and the resolution is kept unless you choose a maximum (4K, 1080p, 720p, 480p) under *More options*.
   - **Test on one file first** — re-encoding several files of a show starts with a test: short excerpts of one file are encoded at each quality level (a minute or two), and you get the estimated size, the space saved in % and a measured picture score for each, plus a before/after viewer on the same frames (move the pointer to slide between both, click to zoom). Pick a level, the whole batch runs with it.
@@ -69,7 +78,8 @@ Shrink a whole season in a few clicks: the old and new size of each file, the sp
 3. Hit **Search subtitles**. Green chips = subtitle saved next to the video; red chips = nothing saved — hover or click the chip to see what each source said.
 4. **Rename episodes** (Rename tab): shows are detected for you — pick one where the app asks, fix a season if a guess is wrong (each show, and each season of its files, has its own picker), check the proposed names, click *Rename*.
 5. **See what's missing** (Shows tab): pick a show to read about it, watch the trailer, and see which episodes you still need.
-6. **Save space** (Re-encode tab): the first time, click *Download and install ffmpeg* (about 200 MB, once). Then tick the files, click *Re-encode* — for several files of a show, a short test on one file lets you pick the quality first — and when a file is done, *Compare* it and choose **Keep new** or **Undo**. Search subtitles *before* re-encoding: a re-encoded file no longer matches the exact-file lookup some sources offer.
+6. **Check the sync** (Sync tab): pick a video; Subtitall listens to it (ffmpeg is needed — the tab sets it up the first time, like Re-encode) and says which of its subtitles follow the speech. Click *Fix it* on one that is early, late or drifting; *Undo* brings the original back. Drop other subtitle files on the tab to compare them too.
+7. **Save space** (Re-encode tab): the first time, click *Download and install ffmpeg* (about 200 MB, once). Then tick the files, click *Re-encode* — for several files of a show, a short test on one file lets you pick the quality first — and when a file is done, *Compare* it and choose **Keep new** or **Undo**. Search subtitles *before* re-encoding: a re-encoded file no longer matches the exact-file lookup some sources offer.
 
 ## Development
 
@@ -122,7 +132,7 @@ only (see Releasing).
 
 | Layer | Where | What |
 |---|---|---|
-| Core | `src/Subtitall/Core` | Filename parser, episode/season guesser, show detection, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, re-encode planner (`Core/Reencode`), settings |
+| Core | `src/Subtitall/Core` | Filename parser, episode/season guesser, show detection, media library, subtitle providers, ranking, provider health tracking, TVMaze/TMDB clients, rename engine, re-encode planner (`Core/Reencode`), subtitle sync analyser (`Core/Sync`: parser, speech detector, FFT alignment), settings |
 | API | `src/Subtitall/Api` | Minimal-API REST endpoints + Server-Sent Events for live progress |
 | UI | `src/Subtitall/wwwroot` | Simple tabbed interface — vanilla HTML/CSS/JS, zero frontend dependencies |
 | Shell | `Program.cs` + ElectronNET.Core | Electron window, native dialogs, auto-update |
@@ -133,7 +143,9 @@ lives in `%APPDATA%/Subtitall/ffmpeg` (`~/.config/Subtitall/ffmpeg` on Linux); t
 order, the folder set in *Settings → Re-encoding*, that download, then the `ffmpeg` + `ffprobe` of the
 `PATH` and of the folders package managers install into (winget, Scoop, Chocolatey, Homebrew) — the
 first one that actually runs. Real encodes are not covered by `dotnet test` (no ffmpeg
-on CI): after touching `Core/Reencode` or `ReencodeService`, re-encode a real file end to end.
+on CI): after touching `Core/Reencode` or `ReencodeService`, re-encode a real file end to end. The Sync tab uses the same ffmpeg; its
+analysis is tested on synthetic dialogue, so after touching `Core/Sync` (the speech detector above all, whose thresholds were tuned on real
+speech), run it on a real video with a few subtitles you know: one right, one shifted, one for another frame rate.
 
 ### Releasing
 

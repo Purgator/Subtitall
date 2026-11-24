@@ -360,6 +360,50 @@ export function reencodeFiles() {
   });
 }
 
+/** What GET /api/sync/{id} returns: the subtitles of one episode, each compared with its audio. */
+export function syncSession(itemId) {
+  const item = library.find((i) => i.id === itemId) ?? library[0];
+  const base = item.fileName.replace(/\.[^.]+$/, "");
+  const segment = (index, shift, extra = {}) => ({
+    time: 330 + index * 480, shift, score: 0.62, dominance: 1.7, valid: shift !== null, outlier: false, ...extra,
+  });
+  const analysis = (verdict, headline, advice, o) => ({
+    verdict, confidence: "high", fix: null, startError: 0, endError: 0, currentScore: 0.6, fixedScore: 0.6,
+    currentCoverage: 0.8, fixedCoverage: 0.8, dominance: 1.8, speechCues: 640, segments: [], rankScore: 0.6, headline, advice, ...o,
+  });
+  const candidate = (name, language, source, found, extra = {}) => ({
+    path: `D:\\Videos\\${name}`, name, folder: source === "added" ? "D:\\Downloads" : null, language, source, size: 61_440,
+    analyzed: true, analysis: found, error: null, best: false, action: null, replaces: null, canUndo: false, ...extra,
+  });
+  const steady = (shift) => [0, 1, 2, 3, 4].map((i) => segment(i, shift));
+
+  return {
+    itemId: item.id, state: "done", percent: 100, step: "", error: null,
+    audioTracks: [{ index: 0, label: "eng · AAC stereo" }], audioIndex: 0,
+    durationSeconds: 2580, speechPercent: 41,
+    candidates: [
+      candidate(`${base}.en.srt`, "en", "folder", analysis("inSync", "In sync", "", {
+        fixedScore: 0.68, rankScore: 0.68, currentScore: 0.68, currentCoverage: 0.81, fixedCoverage: 0.81, startError: 0.1, endError: 0.1, segments: steady(0.1),
+      }), { best: true }),
+      candidate(`${base}.fr.srt`, "fr", "folder", analysis("shift", "Appears 2.6 s too early", "Delay it by 2.6 s", {
+        fix: { scale: 1, offset: 2.6, rate: null }, fixedScore: 0.65, rankScore: 0.62, currentScore: 0.12, currentCoverage: 0.34, fixedCoverage: 0.8, startError: 2.6, endError: 2.6, segments: steady(2.6),
+      }), { best: true, action: "fix" }),
+      candidate("Hoshi.no.Haitatsunin.13.WEB-DL.en.srt", "en", "added", analysis("shift", "Appears 7.0 s too late", "Bring it forward by 7.0 s", {
+        fix: { scale: 1, offset: -7, rate: null }, fixedScore: 0.66, rankScore: 0.64, currentScore: 0.05, currentCoverage: 0.22, fixedCoverage: 0.79, startError: -7, endError: -7, segments: steady(-7),
+      }), { action: "fix", replaces: `${base}.en.srt` }),
+      candidate(`${base}.de.srt`, "de", "folder", analysis("rescale", "Drifts: in sync at the start, 2.6 s early at the end \u2014 looks like a 24 \u2192 23.976 fps mismatch",
+        "Stretch it \u00d71.0010 and shift it by +0.20 s", {
+          fix: { scale: 1.001, offset: 0.2, rate: "24 \u2192 23.976 fps" }, fixedScore: 0.64, rankScore: 0.57, currentScore: 0.31, currentCoverage: 0.52, fixedCoverage: 0.79, startError: 0.2, endError: 2.8,
+          segments: [0.2, 0.7, 1.3, 1.9, 2.6].map((s, i) => segment(i, s)),
+        }), { best: true, action: "fix" }),
+      candidate("Hoshi no Haitatsunin - 13 (extended cut).es.srt", "es", "added", analysis("differentCut", "Does not follow the video with one shift: probably made for another cut", "Look for another subtitle", {
+        fixedScore: 0.41, rankScore: 0.2, currentScore: 0.4, currentCoverage: 0.55, fixedCoverage: 0.55, confidence: "low",
+        segments: [segment(0, -0.1), segment(1, -0.1), segment(2, -41.6, { outlier: true }), segment(3, -41.5, { outlier: true }), segment(4, -41.6, { outlier: true })],
+      })),
+    ],
+  };
+}
+
 /** What GET /api/reencode/status returns: ffmpeg installed, a season of Harbor Lights under way. */
 export function reencodeStatus() {
   const season = library.filter((i) => i.fileName.startsWith("Harbor.Lights.S01"));

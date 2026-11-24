@@ -51,6 +51,13 @@ const shots = [
     ready: `document.querySelectorAll(".re-table tbody tr").length > 8 && !!document.querySelector(".re-table .re-progress") && !!document.querySelector(".re-quality")`,
   },
   {
+    file: "sync.png", size: WINDOW, tab: "sync",
+    // Open the details of the subtitle that drifts: they show how the shift grows along the video.
+    before: `document.querySelectorAll(".sync-row").length >= 5`,
+    act: `[...document.querySelectorAll(".sync-row")].find((r) => r.textContent.includes("Needs stretching")).querySelector('[data-sync="details"]').click()`,
+    ready: `!!document.querySelector(".sync-details")`,
+  },
+  {
     file: "settings.png", size: COMPACT, tab: "settings",
     // The page opens on the long language list; the providers below it say more about the app.
     act: `document.querySelector("#card-gestdown").closest(".settings-section").scrollIntoView()`,
@@ -84,6 +91,7 @@ function startServer(version) {
     "GET /api/reencode/status": () => demo.reencodeStatus(),
     "POST /api/reencode/analyze": () => demo.reencodeFiles(),
   };
+  const sync = /^\/api\/sync\/([^/]+)$/;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -97,6 +105,8 @@ function startServer(version) {
         return; // kept open, like the real stream
       }
       if (routes[key]) return json(res, routes[key]());
+      const syncId = url.pathname.match(sync)?.[1];
+      if (req.method === "GET" && syncId) return json(res, demo.syncSession(syncId));
       const show = url.pathname.match(/^\/api\/shows\/[^/]+\/(\d+)$/);
       if (req.method === "GET" && show && demo.showDetails(+show[1])) return json(res, demo.showDetails(+show[1]));
       if (url.pathname.startsWith("/api/")) {
@@ -214,7 +224,7 @@ try {
     await page.send("Page.navigate", { url: `${origin}/` });
     await page.waitFor(`document.querySelectorAll(".file-table tbody tr[data-row]").length === ${demo.library.length}`, "the file list");
     if (shot.tab) await page.evaluate(`document.querySelector('.tab[data-view="${shot.tab}"]').click()`);
-    await page.waitFor(shot.act ? "true" : shot.ready, shot.file);
+    await page.waitFor(shot.before ?? (shot.act ? "true" : shot.ready), shot.file);
     if (shot.act) await page.evaluate(shot.act);
     await page.waitFor(shot.ready, shot.file);
     await page.evaluate("document.fonts.ready.then(() => true)");
