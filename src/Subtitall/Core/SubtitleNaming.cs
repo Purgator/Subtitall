@@ -13,6 +13,16 @@ public static partial class SubtitleNaming
     [GeneratedRegex(@"^\.([A-Za-z]{2,3}([-_][A-Za-z]{2,4})?\.)?(srt|ass|ssa|sub|vtt)$", RegexOptions.IgnoreCase)]
     private static partial Regex CompanionSuffixRegex();
 
+    [GeneratedRegex(@"\.([A-Za-z]{2,3}(?:[-_][A-Za-z]{2,4})?)\.(?:srt|ass|ssa|sub|vtt)$", RegexOptions.IgnoreCase)]
+    private static partial Regex LanguageSuffixRegex();
+
+    /// <summary>The language code a subtitle file name ends with ("Show.S01E01.fr.srt" → "fr"), or null.</summary>
+    public static string? GuessLanguage(string path)
+    {
+        var match = LanguageSuffixRegex().Match(Path.GetFileName(path));
+        return match.Success ? match.Groups[1].Value.ToLowerInvariant() : null;
+    }
+
     /// <summary>Path for a downloaded subtitle: "video.en.srt" next to "video.mkv".</summary>
     public static string GetSubtitlePath(string videoPath, string languageCode, string extension = ".srt")
     {
