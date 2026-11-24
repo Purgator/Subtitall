@@ -74,6 +74,21 @@ public sealed class SyncServiceTests : IDisposable
     }
 
     [Fact]
+    public void Every_video_of_the_library_is_listed_with_its_own_subtitles()
+    {
+        _dir.CreateFile(@"video\Show.S01E01.en.srt", Srt);
+        _dir.CreateFile(@"video\Show.S01E02.mkv");
+        _library.AddPaths([_dir.Path]);
+
+        var all = JsonSerializer.SerializeToElement(_sync.DescribeAll(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.Equal(2, all.GetArrayLength());
+        var counts = all.EnumerateArray().Select(d => d.GetProperty("candidates").GetArrayLength()).Order().ToArray();
+        Assert.Equal([0, 1], counts);
+        _sync.CancelAll(); // nothing runs: must not throw
+    }
+
+    [Fact]
     public void A_fix_rewrites_the_subtitle_keeping_the_original_and_undo_puts_it_back()
     {
         var path = _dir.CreateFile(@"video\Show.S01E01.en.srt", Srt);

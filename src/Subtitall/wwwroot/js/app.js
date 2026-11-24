@@ -63,8 +63,8 @@ const state = {
   },
   // sync view
   sync: {
-    itemId: null,         // the video being checked
-    data: null,           // /api/sync/{itemId}: its subtitles and what the comparison found
+    itemId: null,         // the video opened in the list
+    all: null,            // itemId -> /api/sync/{itemId}: its subtitles and what the comparison found (null = not loaded yet)
     error: null,
     open: {},             // subtitle path -> details shown
     started: {},          // itemId -> a comparison was started automatically on this visit
@@ -183,6 +183,11 @@ function connectEvents() {
         if (state.view !== "rename") state.proposals = null;
         else if (state.proposals !== null && !state.renameBusy) loadProposalsDebounced();
         if (state.shows !== null) { state.showDetails = null; loadShowsDebounced(); }
+        // And for what the Sync tab knows about each video's subtitles.
+        if (type === "library-changed") {
+          if (state.view === "sync") loadSyncAllDebounced();
+          else if (!Object.keys(state.sync.busy).length) state.sync.all = null;
+        }
         // Same for what the Re-encode tab knows about each file.
         if (type === "library-changed" && state.reencode.files !== null) {
           if (state.view === "reencode") loadReencodeFilesDebounced();
@@ -197,20 +202,23 @@ function connectEvents() {
         break;
       }
       case "sync-changed":
-        if (data.state === "running") state.sync.busy[data.itemId] = { percent: data.percent, step: data.step };
+        if (data.state === "running" || data.state === "queued") state.sync.busy[data.itemId] = { percent: data.percent, step: data.step };
         else delete state.sync.busy[data.itemId];
-        if (data.itemId === state.sync.itemId) state.sync.data = data;
+        if (state.sync.all) state.sync.all[data.itemId] = data;
         if (state.view === "sync") render(); else renderTopbar();
         break;
       case "sync-progress": {
         state.sync.busy[data.itemId] = { percent: data.percent, step: data.step };
-        if (state.sync.data?.itemId === data.itemId) Object.assign(state.sync.data, { percent: data.percent, step: data.step });
+        if (state.sync.all?.[data.itemId]) Object.assign(state.sync.all[data.itemId], { percent: data.percent, step: data.step });
         renderTopbar();
-        if (state.view === "sync" && data.itemId === state.sync.itemId) {
-          const bar = document.getElementById("sync-bar");
-          if (bar) bar.style.width = `${data.percent}%`;
-          const step = document.getElementById("sync-step");
-          if (step) step.textContent = data.step;
+        if (state.view === "sync") {
+          const set = (selector, apply) => { const el = document.querySelector(selector); if (el) apply(el); };
+          set(`[data-sync-bar="${data.itemId}"]`, (el) => { el.style.width = `${data.percent}%`; });
+          set(`[data-sync-step="${data.itemId}"]`, (el) => { el.textContent = data.step; });
+          if (data.itemId === state.sync.itemId) {
+            set("#sync-bar", (el) => { el.style.width = `${data.percent}%`; });
+            set("#sync-step", (el) => { el.textContent = data.step; });
+          }
         }
         break;
       }
@@ -314,7 +322,11 @@ function setupDragDrop() {
     }
     try {
       // Subtitle files dropped on the Sync tab join the comparison of the video it shows.
-      const subtitles = state.view === "sync" && state.sync.itemId ? paths.filter(isSubtitlePath) : [];
+      const subtitles = state.view === "sync" ? paths.filter(isSubtitlePath) : [];
+      if (subtitles.length && !state.sync.itemId) {
+        toast("Open a video in the list first, then drop its subtitles", "err");
+        return;
+      }
       if (subtitles.length) {
         const { added } = await post("/api/sync/add", { itemId: state.sync.itemId, paths: subtitles });
         toast(added > 0 ? `Added ${added} subtitle${added > 1 ? "s" : ""} to compare` : "Already in the comparison", added > 0 ? "ok" : "info");
@@ -2481,7 +2493,8 @@ function reencodeProgressText() {
 }
 
 // ---------- Sync view ------------------------------------------------------------------------------------
-// Compares the subtitles of a video with its audio: which ones follow the speech, and how to fix the others.
+// Compares the subtitles of every video with its audio: which ones follow the speech, and how to fix the others.
+// Videos are listed by show, like in the Re-encode tab; a video opens to show its subtitles one by one.
 
 const SYNC_BADGES = {
   inSync: { text: "In sync", cls: "ok" },
@@ -2495,37 +2508,147 @@ const SYNC_BADGES = {
 const isSubtitlePath = (path) => /\.(srt|vtt|ass|ssa)$/i.test(path);
 const percentText = (x) => `${Math.round((x || 0) * 100)}%`;
 const signed = (seconds) => `${seconds > 0 ? "+" : seconds < 0 ? "−" : ""}${Math.abs(seconds).toFixed(Math.abs(seconds) < 10 ? 1 : 0)} s`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-// Guards against a slow answer for another video landing after the user moved on.
+// Guards against an older answer landing after a newer one.
 let syncLoadToken = 0;
 
-async function loadSync(itemId) {
+// Every video with what the server knows about its subtitles (null until asked).
+async function loadSyncAll() {
   const s = state.sync;
   const token = ++syncLoadToken;
   try {
-    const data = await get(`/api/sync/${itemId}`);
-    if (token !== syncLoadToken || s.itemId !== itemId) return;
+    const list = await get("/api/sync");
+    if (token !== syncLoadToken) return;
     s.error = null;
-    s.data = data;
-    // Subtitles nobody has looked at yet (first visit, or a new file next to the video): compare them.
-    const unseen = data.candidates.some((c) => !c.analyzed);
-    if (data.state === "idle" && unseen && !s.started[itemId]) {
-      s.started[itemId] = true;
-      await post("/api/sync/analyze", { itemId });
+    s.all = Object.fromEntries(list.map((d) => [d.itemId, d]));
+    for (const d of list) {
+      if (d.state === "running" || d.state === "queued") s.busy[d.itemId] = { percent: d.percent, step: d.step };
+      else delete s.busy[d.itemId];
     }
   } catch (err) {
-    if (token === syncLoadToken) s.error = err.message;
+    if (token === syncLoadToken) { s.error = err.message; s.all = {}; }
   }
   if (state.view === "sync") render();
 }
 
+const loadSyncAllDebounced = debounce(() => loadSyncAll().catch(console.error), 400);
+
 function syncProgressText() {
-  const busy = Object.values(state.sync.busy)[0];
-  return busy ? `Listening ${Math.floor(busy.percent)}%` : "";
+  const busy = Object.values(state.sync.busy);
+  if (!busy.length) return "";
+  const running = busy.find((b) => b.step && b.percent > 0) || busy[0];
+  const waiting = busy.length - 1;
+  return `Listening ${Math.floor(running.percent || 0)}%${waiting ? ` · ${waiting} waiting` : ""}`;
 }
 
+// What a video's row says: a kind, and the numbers behind it.
+function syncSummary(d) {
+  if (!d) return { kind: "loading" };
+  if (d.state === "running") return { kind: "running", percent: d.percent, step: d.step };
+  if (d.state === "queued") return { kind: "queued" };
+  if (d.state === "failed") return { kind: "failed", error: d.error };
+  if (!d.candidates.length) return { kind: "none" };
+  // The subtitles that sit next to the video are the ones that count; files added to compare come second.
+  const own = d.candidates.filter((c) => c.source === "folder");
+  const pool = own.length ? own : d.candidates;
+  if (pool.some((c) => !c.analyzed)) return { kind: "unchecked", total: pool.length };
+  const inSync = pool.filter((c) => c.analysis?.verdict === "inSync").length;
+  const fixable = pool.filter((c) => c.action === "fix").length;
+  const trouble = pool.length - inSync - fixable;
+  return { kind: fixable ? "fix" : trouble ? "trouble" : "ok", inSync, fixable, trouble, total: pool.length };
+}
+
+const syncWaiting = (item) => ["running", "queued"].includes(state.sync.all?.[item.id]?.state);
+const syncCheckable = (item) => {
+  const k = syncSummary(state.sync.all?.[item.id]).kind;
+  return k === "unchecked" || k === "failed";
+};
+
+function syncStatusHtml(item) {
+  const d = state.sync.all?.[item.id];
+  const s = syncSummary(d);
+  switch (s.kind) {
+    case "loading": return `<span class="hint-text">…</span>`;
+    case "running":
+      return `<span class="re-progress"><div data-sync-bar="${item.id}" style="width:${s.percent || 0}%"></div></span>
+        <span class="re-progress-text" data-sync-step="${item.id}">${esc(s.step || "")}</span>
+        <button class="icon-btn" data-sync="stop" data-id="${item.id}" title="Stop">&#10005;</button>`;
+    case "queued":
+      return `<span class="hint-text">Waiting…</span> <button class="icon-btn" data-sync="stop" data-id="${item.id}" title="Remove from the queue">&#10005;</button>`;
+    case "failed":
+      return `<span class="sync-badge bad" title="${esc(s.error || "")}">Failed</span> <span class="hint-text">${esc(s.error || "")}</span>
+        <button class="btn small secondary" data-sync="check" data-id="${item.id}">Try again</button>`;
+    case "none": return `<span class="hint-text">No subtitle next to this video — open it to add some</span>`;
+    case "unchecked":
+      return `<span class="hint-text">${plural(s.total, "subtitle")}, not checked yet</span>
+        <button class="btn small secondary" data-sync="check" data-id="${item.id}">Check</button>`;
+    case "ok":
+      return `<span class="sync-badge ok">In sync</span> <span class="hint-text">${s.total === 1 ? "" : `all ${s.total}`}</span>`;
+    case "fix":
+      return `<span class="sync-badge warn">${s.fixable} to fix</span>
+        <span class="hint-text">${[s.inSync ? `${s.inSync} in sync` : "", s.trouble ? `${s.trouble} can't be trusted` : ""].filter(Boolean).join(" · ")}</span>`;
+    default:
+      return `<span class="sync-badge dim">Can't tell</span> <span class="hint-text">${s.inSync ? `${s.inSync} in sync · ` : ""}${plural(s.trouble, "subtitle")} to look at</span>`;
+  }
+}
+
+function syncGroupSummary(group) {
+  const kinds = group.items.map((i) => syncSummary(state.sync.all?.[i.id]));
+  const count = (k) => kinds.filter((x) => x.kind === k).length;
+  const parts = [plural(group.items.length, "file")];
+  if (count("ok")) parts.push(`${count("ok")} in sync`);
+  if (count("fix")) parts.push(`${count("fix")} to fix`);
+  if (count("trouble")) parts.push(`${count("trouble")} to look at`);
+  if (count("unchecked")) parts.push(`${count("unchecked")} not checked`);
+  if (count("none")) parts.push(`${count("none")} without subtitle`);
+  return parts.join(" · ");
+}
+
+function syncGroupActionsHtml(group) {
+  const todo = group.items.filter(syncCheckable);
+  return todo.length
+    ? `<button class="btn small" data-sync="check-group" data-group="${esc(group.key)}">Check ${plural(todo.length, "video")}</button>`
+    : "";
+}
+
+function syncVideoRowHtml(item) {
+  const s = state.sync;
+  const d = s.all?.[item.id];
+  const open = s.itemId === item.id;
+  const langs = (d?.candidates || []).filter((c) => c.source === "folder" && c.language)
+    .map((c) => `<span class="sync-chip">${esc(c.language)}</span>`).join(" ");
+  return `
+    <tr class="sync-vrow${open ? " open" : ""}" data-sync="toggle" data-id="${item.id}">
+      <td title="${esc(item.path)}"><span class="sync-caret">${open ? "▾" : "▸"}</span> ${esc(item.fileName)}</td>
+      <td class="col-langs">${langs}</td>
+      <td class="col-status" data-sync-status="${item.id}">${syncStatusHtml(item)}</td>
+    </tr>
+    ${open ? `<tr class="sync-drow"><td colspan="3">${syncDetailHtml(item, d)}</td></tr>` : ""}`;
+}
+
+function syncGroupHtml(group) {
+  const name = group.kind === "title" ? `“${esc(group.name)}”` : esc(group.name);
+  return `
+    <div class="card re-group" data-sync-group="${esc(group.key)}">
+      <div class="group-head">
+        <div class="meta">
+          <div class="name">${name}</div>
+          <div class="sub">${esc(syncGroupSummary(group))}</div>
+        </div>
+        <span class="re-group-actions">${syncGroupActionsHtml(group)}</span>
+      </div>
+      <table class="file-table re-table">
+        <thead><tr><th>File</th><th class="col-langs">Subtitles</th><th class="col-status">Sync</th></tr></thead>
+        <tbody>${group.items.map(syncVideoRowHtml).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+// ---- One video, opened ------------------------------------------------------------------------------
+
 function syncSummaryHtml(d) {
-  if (d.state === "running") {
+  if (d.state === "running" || d.state === "queued") {
     return `
       <div class="re-banner sync-running">
         <div class="re-progress big"><div id="sync-bar" style="width:${d.percent || 0}%"></div></div>
@@ -2539,12 +2662,14 @@ function syncSummaryHtml(d) {
     return `<div class="re-banner warn">${esc(d.error || "The comparison failed.")} <span class="linkish" data-sync="analyze">Try again</span></div>`;
   if (!d.candidates.length)
     return `<div class="re-banner">No subtitle file sits next to this video. Add the subtitles you want to compare — they can come from anywhere.</div>`;
+  if (d.candidates.some((c) => !c.analyzed))
+    return `<div class="re-banner">Not compared yet. <span class="linkish" data-sync="analyze">Compare now</span></div>`;
 
   const best = d.candidates.filter((c) => c.best);
   const analysed = d.candidates.filter((c) => c.analysis).length;
   const minutes = Math.round((d.durationSeconds || 0) / 60);
   const facts = d.durationSeconds
-    ? `<span class="hint-text">Compared ${analysed} subtitle${analysed === 1 ? "" : "s"} with ${minutes} min of audio, speech heard ${d.speechPercent}% of the time.</span>`
+    ? `<span class="hint-text">Compared ${plural(analysed, "subtitle")} with ${minutes} min of audio, speech heard ${d.speechPercent}% of the time.</span>`
     : "";
   if (!best.length)
     return `<div class="re-banner warn">None of these subtitles matches this video's audio well enough to trust. Try other subtitle files. ${facts}</div>`;
@@ -2621,6 +2746,29 @@ function syncDetailsHtml(a) {
     </div>`;
 }
 
+function syncDetailHtml(item, d) {
+  if (!d) return `<div class="panel-empty"><span class="spin"></span> Looking at this video…</div>`;
+  const tracks = d.audioTracks?.length > 1
+    ? `<label>Audio <select class="input" id="sync-audio">${d.audioTracks.map((t) => `<option value="${t.index}"${t.index === d.audioIndex ? " selected" : ""}>${esc(t.label)}</option>`).join("")}</select></label>`
+    : "";
+  const busy = d.state === "running" || d.state === "queued";
+  let rank = 0;
+  const rows = d.candidates.map((c) => syncRowHtml(c, c.analysis && c.analysis.verdict !== "unreadable" ? ++rank : 0)).join("");
+  return `
+    <div class="sync-detail">
+      <div class="re-options sync-head">
+        ${tracks}
+        <span class="grow"></span>
+        <button class="btn small secondary" data-sync="add">Add subtitle files…</button>
+        <button class="btn small secondary" data-sync="analyze"${busy ? " disabled" : ""}>Compare again</button>
+      </div>
+      ${syncSummaryHtml(d)}
+      ${d.candidates.length ? `<div class="card sync-list">${rows}</div>` : ""}
+    </div>`;
+}
+
+// ---- The tab ------------------------------------------------------------------------------------------
+
 function renderSyncView(main) {
   const s = state.sync;
   const r = state.reencode;
@@ -2637,50 +2785,34 @@ function renderSyncView(main) {
     main.innerHTML = `<div class="dropzone"><div class="title">No video to check yet</div><div>Add videos in the Files tab (or drop them here): Subtitall then tells you whether their subtitles follow the speech.</div></div>`;
     return;
   }
-  if (!state.items.some((i) => i.id === s.itemId)) { s.itemId = state.items[0].id; s.data = null; }
-
-  const d = s.data && s.data.itemId === s.itemId ? s.data : null;
-  if (!d && !s.error) loadSync(s.itemId);
-
-  const videos = state.items.map((i) => `<option value="${i.id}"${i.id === s.itemId ? " selected" : ""}>${esc(i.fileName)}</option>`).join("");
-  const tracks = d?.audioTracks?.length > 1
-    ? `<label>Audio <select class="input" id="sync-audio">${d.audioTracks.map((t) => `<option value="${t.index}"${t.index === d.audioIndex ? " selected" : ""}>${esc(t.label)}</option>`).join("")}</select></label>`
-    : "";
-  const running = d?.state === "running";
-
-  let body;
-  if (s.error) body = `<div class="re-banner warn">${esc(s.error)} <span class="linkish" data-sync="reload">Try again</span></div>`;
-  else if (!d) body = `<div class="panel-empty"><span class="spin"></span> Looking at this video…</div>`;
-  else {
-    let rank = 0;
-    const rows = d.candidates.map((c) => syncRowHtml(c, c.analysis && c.analysis.verdict !== "unreadable" ? ++rank : 0)).join("");
-    body = `${syncSummaryHtml(d)}${d.candidates.length ? `<div class="card sync-list">${rows}</div>` : ""}`;
+  if (s.all === null) {
+    main.innerHTML = s.error
+      ? `<div class="panel-empty warn-text">${esc(s.error)}</div>`
+      : `<div class="panel-empty"><span class="spin"></span> Looking at your videos…</div>`;
+    loadSyncAll();
+    return;
   }
 
+  const todo = state.items.filter(syncCheckable);
+  const anyBusy = state.items.some(syncWaiting);
   main.innerHTML = `
-    <div class="re-options sync-head">
-      <label>Video <select class="input" id="sync-video">${videos}</select></label>
-      ${tracks}
-      <span class="grow"></span>
-      <button class="btn secondary" data-sync="add">Add subtitle files…</button>
-      <button class="btn secondary" data-sync="analyze"${running ? " disabled" : ""}>Compare again</button>
+    <div class="actionbar re-options">
+      <span class="hint-text">Listens to each video's audio, then checks its subtitles against the speech. Open a video to see them one by one.</span>
+      <div class="grow"></div>
+      <span class="hint-text" title="${esc(r.ffmpeg.path)}">ffmpeg ${esc(r.ffmpeg.version)}</span>
+      ${anyBusy ? `<button class="btn small secondary danger" data-sync="stop-all">Stop everything</button>` : ""}
+      ${todo.length ? `<button class="btn small" data-sync="check-all">Check ${todo.length === state.items.length ? "all videos" : plural(todo.length, "video")}</button>` : ""}
     </div>
     <details class="sync-how"><summary>How does this work?</summary>
-      <p>Subtitall listens to the video's audio with ffmpeg and finds where people speak. It then slides each subtitle along that speech until the two agree — one shift for the whole file, then the same check on each part of the video, to tell a plain shift from a frame-rate mismatch (the subtitle drifts) or from a subtitle made for another cut.</p>
+      <p>Subtitall listens to each video's audio with ffmpeg (a few seconds per episode) and finds where people speak. It then slides each subtitle along that speech until the two agree — one shift for the whole file, then the same check on each part of the video, to tell a plain shift from a frame-rate mismatch (the subtitle drifts) or from a subtitle made for another cut.</p>
       <p>No file leaves your computer. Fixing a subtitle writes the corrected file and keeps the original next to it as <code>.bak</code>; <i>Undo</i> puts it back. Subtitles the app cannot tell anything about are marked <i>Can't tell</i> rather than guessed.</p>
     </details>
-    ${body}`;
+    ${s.error ? `<div class="re-banner warn">${esc(s.error)}</div>` : ""}
+    ${mediaGroups().map(syncGroupHtml).join("")}`;
 
   main.onchange = (e) => {
-    if (e.target.id === "sync-video") {
-      s.itemId = e.target.value;
-      s.data = null;
-      s.error = null;
-      s.open = {};
-      render();
-    } else if (e.target.id === "sync-audio") {
+    if (e.target.id === "sync-audio")
       post("/api/sync/analyze", { itemId: s.itemId, audioIndex: Number(e.target.value) }).catch((err) => toast(err.message, "err"));
-    }
   };
   main.onclick = (e) => {
     const el = e.target.closest("[data-sync]");
@@ -2692,9 +2824,29 @@ async function syncAction(action, data) {
   const s = state.sync;
   const itemId = s.itemId;
   switch (action) {
-    case "analyze": s.error = null; await post("/api/sync/analyze", { itemId }); break;
+    case "toggle": {
+      s.itemId = s.itemId === data.id ? null : data.id;
+      s.open = {};
+      render();
+      // Opening a video nobody has looked at yet: compare its subtitles.
+      const d = s.all?.[data.id];
+      if (s.itemId && d && d.state === "idle" && d.candidates.some((c) => !c.analyzed) && !s.started[data.id]) {
+        s.started[data.id] = true;
+        await post("/api/sync/analyze", { itemId: data.id });
+      }
+      break;
+    }
+    case "check": await post("/api/sync/analyze-many", { itemIds: [data.id] }); break;
+    case "check-all": await post("/api/sync/analyze-many", { itemIds: state.items.filter(syncCheckable).map((i) => i.id) }); break;
+    case "check-group": {
+      const group = mediaGroups().find((g) => g.key === data.group);
+      if (group) await post("/api/sync/analyze-many", { itemIds: group.items.filter(syncCheckable).map((i) => i.id) });
+      break;
+    }
+    case "stop": await post("/api/sync/cancel", { itemId: data.id }); break;
+    case "stop-all": await post("/api/sync/cancel", {}); break;
+    case "analyze": await post("/api/sync/analyze", { itemId }); break;
     case "cancel": await post("/api/sync/cancel", { itemId }); break;
-    case "reload": s.error = null; s.data = null; render(); break;
     case "details": s.open[data.path] = !s.open[data.path]; render(); break;
     case "remove": await post("/api/sync/remove", { itemId, path: data.path }); break;
     case "add": await syncBrowse(); break;
@@ -2721,7 +2873,7 @@ async function syncBrowse() {
     if (!path) return;
     ({ added } = await post("/api/sync/add", { itemId, paths: [path] }));
   }
-  if (added > 0) toast(`Added ${added} subtitle${added === 1 ? "" : "s"} to compare`, "ok");
+  if (added > 0) toast(`Added ${plural(added, "subtitle")} to compare`, "ok");
 }
 
 // ---------- Init ------------------------------------------------------------------------------------
@@ -2731,7 +2883,7 @@ function setupNavigation() {
     tab.onclick = () => {
       state.view = tab.dataset.view;
       // The folder may have changed since the last visit (a subtitle downloaded, one removed).
-      if (state.view === "sync") Object.assign(state.sync, { data: null, error: null, started: {} });
+      if (state.view === "sync") Object.assign(state.sync, { all: null, error: null, started: {} });
       render();
     };
   });

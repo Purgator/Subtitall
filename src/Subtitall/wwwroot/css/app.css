@@ -608,6 +608,13 @@ details.season[open] summary::before { content: "▾ "; }
 .sync-how { margin-bottom: 12px; color: var(--dim); font-size: 13px; user-select: text; }
 .sync-how summary { cursor: pointer; width: fit-content; }
 .sync-how p { margin: 8px 0 0; max-width: 820px; }
+.sync-vrow { cursor: pointer; }
+.sync-vrow.open td { background: var(--card-2); }
+.sync-caret { display: inline-block; width: 14px; color: var(--dim); }
+.sync-drow > td { padding: 12px 14px 16px 30px !important; background: var(--bg) !important; }
+.sync-detail .re-banner:last-child { margin-bottom: 0; }
+.re-table .col-langs { width: 130px; }
+.re-table .col-status { width: 46%; }
 .sync-running .re-progress.big { margin-bottom: 4px; }
 .sync-list { margin-top: 2px; }
 .sync-row {

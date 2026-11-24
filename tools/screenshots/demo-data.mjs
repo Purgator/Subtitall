@@ -360,8 +360,8 @@ export function reencodeFiles() {
   });
 }
 
-/** What GET /api/sync/{id} returns: the subtitles of one episode, each compared with its audio. */
-export function syncSession(itemId) {
+/** What one entry of GET /api/sync holds: the subtitles of one episode, each compared with its audio. */
+function syncSession(itemId) {
   const item = library.find((i) => i.id === itemId) ?? library[0];
   const base = item.fileName.replace(/\.[^.]+$/, "");
   const segment = (index, shift, extra = {}) => ({
@@ -402,6 +402,22 @@ export function syncSession(itemId) {
       })),
     ],
   };
+}
+
+/**
+ * What GET /api/sync returns: every video with what is known about its subtitles. The files cycle through
+ * "one subtitle in sync", "several, one needing a fix" (the rich example), "not checked yet" and "no subtitle".
+ */
+export function syncAll() {
+  return library.map((item, index) => {
+    const full = syncSession(item.id);
+    switch (index % 4) {
+      case 0: return { ...full, candidates: [full.candidates[0]] };
+      case 1: return full;
+      case 2: return { ...full, durationSeconds: 0, candidates: full.candidates.slice(0, 2).map((c) => ({ ...c, analyzed: false, analysis: null, best: false, action: null })) };
+      default: return { ...full, durationSeconds: 0, candidates: [] };
+    }
+  });
 }
 
 /** What GET /api/reencode/status returns: ffmpeg installed, a season of Harbor Lights under way. */

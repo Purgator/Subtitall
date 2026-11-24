@@ -9,6 +9,12 @@ public static class SyncEndpoints
     {
         var api = app.MapGroup("/api/sync");
 
+        // Every video with its subtitles and what is known about them: what the Sync tab lists.
+        api.MapGet("/", (SyncService sync) => Results.Ok(sync.DescribeAll()));
+
+        api.MapPost("/analyze-many", (ManyRequest request, SyncService sync) =>
+            Results.Ok(new { started = sync.StartMany(request.ItemIds ?? []) }));
+
         // Everything the Sync tab shows about one video: its subtitles, what was found, the progress.
         api.MapGet("/{itemId}", (string itemId, SyncService sync) =>
             sync.Describe(itemId) is { } description ? Results.Ok(description) : Results.NotFound());
@@ -18,7 +24,9 @@ public static class SyncEndpoints
 
         api.MapPost("/cancel", (AnalyzeRequest request, SyncService sync) =>
         {
-            sync.Cancel(request.ItemId ?? "");
+            // No video named: stop everything.
+            if (string.IsNullOrEmpty(request.ItemId)) sync.CancelAll();
+            else sync.Cancel(request.ItemId);
             return Results.NoContent();
         });
 
@@ -78,6 +86,7 @@ public static class SyncEndpoints
     }
 
     public sealed record AnalyzeRequest(string? ItemId, int? AudioIndex);
+    public sealed record ManyRequest(List<string>? ItemIds);
     public sealed record AddRequest(string? ItemId, List<string>? Paths);
     public sealed record PathRequest(string? ItemId, string? Path);
 }

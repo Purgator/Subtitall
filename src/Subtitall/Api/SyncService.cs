@@ -17,7 +17,7 @@ internal sealed class SyncSession
     public required string ItemId { get; init; }
     /// <summary>Subtitle files the user added from elsewhere than next to the video.</summary>
     public List<string> Extras { get; } = [];
-    public string State { get; set; } = "idle"; // idle, running, done, failed
+    public string State { get; set; } = "idle"; // idle, queued, running, done, failed
     public double Percent { get; set; }
     public string Step { get; set; } = "";
     public string? Error { get; set; }
@@ -133,6 +133,10 @@ public sealed class SyncService
             };
         }
     }
+
+    /// <summary>Every video of the library, as <see cref="Describe"/> tells it (what the Sync tab lists).</summary>
+    public IReadOnlyList<object> DescribeAll() =>
+        _library.GetAll().Select(i => Describe(i.Id)).OfType<object>().ToList();
 
     private void Publish(string itemId)
     {
@@ -268,7 +272,8 @@ public sealed class SyncService
         {
             session.Cancellation?.Cancel();
             cts = session.Cancellation = new CancellationTokenSource();
-            (session.State, session.Percent, session.Step, session.Error) = ("running", 0, "Starting…", null);
+            // One video is listened to at a time: the others wait their turn (see RunAsync).
+            (session.State, session.Percent, session.Step, session.Error) = ("queued", 0, "Waiting for the other videos…", null);
             if (audioIndex is { } index && index != session.AudioIndex)
             {
                 session.AudioIndex = index;
@@ -280,11 +285,25 @@ public sealed class SyncService
         return true;
     }
 
+    /// <summary>Starts the comparison of several videos, one after the other. Returns how many were started.</summary>
+    public int StartMany(IEnumerable<string> itemIds) => itemIds.Distinct().Count(id => Start(id));
+
     public void Cancel(string itemId)
     {
         var session = SessionFor(itemId);
         lock (session)
             session.Cancellation?.Cancel();
+    }
+
+    /// <summary>Stops everything that runs or waits.</summary>
+    public void CancelAll()
+    {
+        List<SyncSession> sessions;
+        lock (_lock)
+            sessions = [.. _sessions.Values];
+        foreach (var session in sessions)
+            lock (session)
+                session.Cancellation?.Cancel();
     }
 
     private static int ChosenTrack(SyncSession session) =>
@@ -312,6 +331,12 @@ public sealed class SyncService
             await _gate.WaitAsync(ct);
             try
             {
+                lock (session)
+                {
+                    if (session.Cancellation != cts) return;
+                    (session.State, session.Step) = ("running", "Starting…");
+                }
+                Publish(item.Id);
                 var tools = await _ffmpeg.GetAsync(ct) ?? throw new InvalidOperationException("ffmpeg is not installed");
 
                 Progress(session, cts, 1, "Reading the video…");

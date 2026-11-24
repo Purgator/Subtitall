@@ -52,9 +52,10 @@ const shots = [
   },
   {
     file: "sync.png", size: WINDOW, tab: "sync",
-    // Open the details of the subtitle that drifts: they show how the shift grows along the video.
-    before: `document.querySelectorAll(".sync-row").length >= 5`,
-    act: `[...document.querySelectorAll(".sync-row")].find((r) => r.textContent.includes("Needs stretching")).querySelector('[data-sync="details"]').click()`,
+    // Open the second video, whose subtitles disagree, then the details of the one that drifts: they show
+    // how the shift grows along the video.
+    before: `document.querySelectorAll(".sync-vrow").length > 8`,
+    act: `document.querySelectorAll(".sync-vrow")[1].click(); setTimeout(() => [...document.querySelectorAll(".sync-row")].find((r) => r.textContent.includes("Needs stretching")).querySelector('[data-sync="details"]').click(), 100)`,
     ready: `!!document.querySelector(".sync-details")`,
   },
   {
@@ -90,8 +91,8 @@ function startServer(version) {
     "GET /api/shows": () => demo.shows(),
     "GET /api/reencode/status": () => demo.reencodeStatus(),
     "POST /api/reencode/analyze": () => demo.reencodeFiles(),
+    "GET /api/sync": () => demo.syncAll(),
   };
-  const sync = /^\/api\/sync\/([^/]+)$/;
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -105,8 +106,6 @@ function startServer(version) {
         return; // kept open, like the real stream
       }
       if (routes[key]) return json(res, routes[key]());
-      const syncId = url.pathname.match(sync)?.[1];
-      if (req.method === "GET" && syncId) return json(res, demo.syncSession(syncId));
       const show = url.pathname.match(/^\/api\/shows\/[^/]+\/(\d+)$/);
       if (req.method === "GET" && show && demo.showDetails(+show[1])) return json(res, demo.showDetails(+show[1]));
       if (url.pathname.startsWith("/api/")) {
