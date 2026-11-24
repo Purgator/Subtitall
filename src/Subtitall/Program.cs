@@ -29,6 +29,7 @@ builder.Services.AddSingleton<BatchSearchService>();
 builder.Services.AddSingleton<UpdateService>();
 builder.Services.AddSingleton<FfmpegService>();
 builder.Services.AddSingleton<ReencodeService>();
+builder.Services.AddSingleton<SyncService>();
 
 builder.UseElectron(args, OnElectronAppReady);
 
@@ -38,6 +39,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapSubtitallApi();
 app.MapReencodeApi();
+app.MapSyncApi();
 
 app.Run();
 
